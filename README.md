@@ -1,15 +1,15 @@
 # Clacky
 
-A command-line interface for interacting with Claude AI. Clacky makes it easy to have conversations with Claude directly from your terminal.
+A command-line interface for interacting with AI models. Clacky supports OpenAI-compatible APIs, making it easy to chat with various AI models directly from your terminal.
 
 ## Features
 
-- 💬 Interactive chat sessions with Claude
+- 💬 Interactive chat sessions with AI models
 - 🚀 Single-message mode for quick queries
 - 🔐 Secure API key management
 - 📝 Multi-turn conversation support
 - 🎨 Colorful terminal output
-- ⚡ Powered by Claude 3.5 Sonnet
+- 🌐 OpenAI-compatible API support (OpenAI, Gitee AI, DeepSeek, etc.)
 
 ## Installation
 
@@ -36,13 +36,16 @@ bundle exec exe/clacky
 
 ## Configuration
 
-Before using Clacky, you need to configure your Claude API key:
+Before using Clacky, you need to configure your settings:
 
 ```bash
 clacky config set
 ```
 
-You'll be prompted to enter your API key. Get your API key from [Claude Console](https://console.anthropic.com/).
+You'll be prompted to enter:
+- **API Key**: Get your API key from [Claude Console](https://console.anthropic.com/)
+- **Model**: Default is `claude-3-5-sonnet-20241022`
+- **Base URL**: Default is `https://api.anthropic.com` (change this if using a proxy or custom endpoint)
 
 To view your current configuration:
 
@@ -72,10 +75,10 @@ clacky chat "What is Ruby?"
 
 ### Specify Model
 
-You can specify which Claude model to use:
+You can specify which model to use (overrides config):
 
 ```bash
-clacky chat --model=claude-3-5-sonnet-20241022 "Hello!"
+clacky chat --model=gpt-4 "Hello!"
 ```
 
 ### Available Commands

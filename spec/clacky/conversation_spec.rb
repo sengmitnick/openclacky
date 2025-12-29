@@ -6,7 +6,7 @@ RSpec.describe Clacky::Conversation do
   let(:client) { instance_double(Clacky::Client) }
 
   before do
-    allow(Clacky::Client).to receive(:new).with(api_key).and_return(client)
+    allow(Clacky::Client).to receive(:new).with(api_key, base_url: "https://api.openai.com").and_return(client)
   end
 
   describe "#initialize" do
@@ -16,7 +16,7 @@ RSpec.describe Clacky::Conversation do
 
     it "creates a client with the provided API key" do
       described_class.new(api_key)
-      expect(Clacky::Client).to have_received(:new).with(api_key)
+      expect(Clacky::Client).to have_received(:new).with(api_key, base_url: "https://api.openai.com")
     end
   end
 

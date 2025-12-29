@@ -4,8 +4,8 @@ module Clacky
   class Conversation
     attr_reader :messages
 
-    def initialize(api_key, model: "claude-3-5-sonnet-20241022")
-      @client = Client.new(api_key)
+    def initialize(api_key, model: "gpt-3.5-turbo", base_url: "https://api.openai.com")
+      @client = Client.new(api_key, base_url: base_url)
       @model = model
       @messages = []
     end

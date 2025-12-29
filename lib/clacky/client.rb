@@ -5,15 +5,13 @@ require "json"
 
 module Clacky
   class Client
-    API_URL = "https://api.anthropic.com/v1/messages"
-    API_VERSION = "2023-06-01"
-
-    def initialize(api_key)
+    def initialize(api_key, base_url: "https://api.openai.com")
       @api_key = api_key
+      @base_url = base_url
     end
 
-    def send_message(content, model: "claude-3-5-sonnet-20241022", max_tokens: 4096)
-      response = connection.post(API_URL) do |req|
+    def send_message(content, model: "gpt-3.5-turbo", max_tokens: 4096)
+      response = connection.post("/v1/chat/completions") do |req|
         req.body = {
           model: model,
           max_tokens: max_tokens,
@@ -29,8 +27,8 @@ module Clacky
       handle_response(response)
     end
 
-    def send_messages(messages, model: "claude-3-5-sonnet-20241022", max_tokens: 4096)
-      response = connection.post(API_URL) do |req|
+    def send_messages(messages, model: "gpt-3.5-turbo", max_tokens: 4096)
+      response = connection.post("/v1/chat/completions") do |req|
         req.body = {
           model: model,
           max_tokens: max_tokens,
@@ -44,10 +42,9 @@ module Clacky
     private
 
     def connection
-      @connection ||= Faraday.new do |conn|
+      @connection ||= Faraday.new(url: @base_url) do |conn|
         conn.headers["Content-Type"] = "application/json"
-        conn.headers["x-api-key"] = @api_key
-        conn.headers["anthropic-version"] = API_VERSION
+        conn.headers["Authorization"] = "Bearer #{@api_key}"
         conn.adapter Faraday.default_adapter
       end
     end
@@ -56,7 +53,7 @@ module Clacky
       case response.status
       when 200
         data = JSON.parse(response.body)
-        data["content"].first["text"]
+        data["choices"].first["message"]["content"]
       when 401
         raise Error, "Invalid API key"
       when 429

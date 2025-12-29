@@ -8,11 +8,12 @@ module Clacky
     CONFIG_DIR = File.join(Dir.home, ".clacky")
     CONFIG_FILE = File.join(CONFIG_DIR, "config.yml")
 
-    attr_accessor :api_key, :model
+    attr_accessor :api_key, :model, :base_url
 
     def initialize(data = {})
       @api_key = data["api_key"]
-      @model = data["model"] || "claude-3-5-sonnet-20241022"
+      @model = data["model"] || "gpt-3.5-turbo"
+      @base_url = data["base_url"] || "https://api.openai.com"
     end
 
     def self.load
@@ -33,7 +34,8 @@ module Clacky
     def to_yaml
       YAML.dump({
         "api_key" => @api_key,
-        "model" => @model
+        "model" => @model,
+        "base_url" => @base_url
       })
     end
   end

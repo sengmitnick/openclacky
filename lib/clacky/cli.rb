@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "thor"
+require "tty-prompt"
+require "tty-spinner"
 
 module Clacky
   class CLI < Thor
@@ -19,9 +21,9 @@ module Clacky
         $ clacky chat "What is Ruby?"
         $ clacky chat
     LONGDESC
-    option :model, type: :string, default: "claude-3-5-sonnet-20241022", desc: "Claude model to use"
+    option :model, type: :string, desc: "Model to use (default from config)"
     def chat(message = nil)
-      config = Config.load
+      config = Clacky::Config.load
 
       unless config.api_key
         say "Error: API key not found. Please run 'clacky config set' first.", :red
@@ -48,8 +50,8 @@ module Clacky
       spinner = TTY::Spinner.new("[:spinner] Thinking...", format: :dots)
       spinner.auto_spin
 
-      client = Client.new(config.api_key)
-      response = client.send_message(message, model: options[:model])
+      client = Clacky::Client.new(config.api_key, base_url: config.base_url)
+      response = client.send_message(message, model: options[:model] || config.model)
 
       spinner.success("Done!")
       say "\n#{response}", :cyan
@@ -63,7 +65,11 @@ module Clacky
       say "Starting interactive chat with Claude...", :green
       say "Type 'exit' or 'quit' to end the session.\n\n", :yellow
 
-      conversation = Conversation.new(config.api_key, model: options[:model])
+      conversation = Clacky::Conversation.new(
+        config.api_key,
+        model: options[:model] || config.model,
+        base_url: config.base_url
+      )
       prompt = TTY::Prompt.new
 
       loop do
@@ -93,24 +99,40 @@ module Clacky
     desc "set", "Set configuration values"
     def set
       prompt = TTY::Prompt.new
-      api_key = prompt.mask("Enter your Claude API key:")
 
-      config = Config.load
+      config = Clacky::Config.load
+
+      # API Key
+      api_key = prompt.mask("Enter your Claude API key:")
       config.api_key = api_key
+
+      # Model
+      model = prompt.ask("Enter model:", default: config.model)
+      config.model = model
+
+      # Base URL
+      base_url = prompt.ask("Enter base URL:", default: config.base_url)
+      config.base_url = base_url
+
       config.save
 
-      say "Configuration saved successfully!", :green
+      say "\nConfiguration saved successfully!", :green
+      say "API Key: #{api_key[0..7]}#{'*' * 20}#{api_key[-4..]}", :cyan
+      say "Model: #{config.model}", :cyan
+      say "Base URL: #{config.base_url}", :cyan
     end
 
     desc "show", "Show current configuration"
     def show
-      config = Config.load
+      config = Clacky::Config.load
 
       if config.api_key
         masked_key = config.api_key[0..7] + ("*" * 20) + config.api_key[-4..]
         say "API Key: #{masked_key}", :cyan
+        say "Model: #{config.model}", :cyan
+        say "Base URL: #{config.base_url}", :cyan
       else
-        say "No API key configured", :yellow
+        say "No configuration found. Run 'clacky config set' to configure.", :yellow
       end
     end
   end

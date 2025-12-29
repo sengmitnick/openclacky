@@ -19,18 +19,20 @@ RSpec.describe Clacky::Config do
       it "returns a new config with default values" do
         config = described_class.load
         expect(config.api_key).to be_nil
-        expect(config.model).to eq("claude-3-5-sonnet-20241022")
+        expect(config.model).to eq("gpt-3.5-turbo")
+        expect(config.base_url).to eq("https://api.openai.com")
       end
     end
 
     context "when config file exists" do
       it "loads configuration from file" do
-        config = described_class.new("api_key" => "test-key", "model" => "claude-3-opus-20240229")
+        config = described_class.new("api_key" => "test-key", "model" => "gpt-4", "base_url" => "https://api.test.com")
         config.save
 
         loaded_config = described_class.load
         expect(loaded_config.api_key).to eq("test-key")
-        expect(loaded_config.model).to eq("claude-3-opus-20240229")
+        expect(loaded_config.model).to eq("gpt-4")
+        expect(loaded_config.base_url).to eq("https://api.test.com")
       end
     end
   end
@@ -66,11 +68,12 @@ RSpec.describe Clacky::Config do
 
   describe "#to_yaml" do
     it "converts config to YAML format" do
-      config = described_class.new("api_key" => "test-key", "model" => "claude-3-opus-20240229")
+      config = described_class.new("api_key" => "test-key", "model" => "gpt-4", "base_url" => "https://api.test.com")
       yaml = config.to_yaml
 
       expect(yaml).to include("api_key: test-key")
-      expect(yaml).to include("model: claude-3-opus-20240229")
+      expect(yaml).to include("model: gpt-4")
+      expect(yaml).to include("base_url: https://api.test.com")
     end
   end
 end
