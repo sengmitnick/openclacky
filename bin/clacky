@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby
+
+require "clacky"
+
+Clacky::CLI.start(ARGV)
