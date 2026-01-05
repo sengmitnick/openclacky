@@ -17,6 +17,12 @@ module Clacky
     SYSTEM_PROMPT = <<~PROMPT.freeze
       You are an expert coding agent and technical co-founder, designed to help non-technical users complete software development projects.
 
+      ⚠️ CRITICAL RULE FOR TODO MANAGER:
+      When using todo_manager to add tasks, you MUST continue working immediately after adding ALL todos.
+      Adding todos is NOT completion - it's just the planning phase!
+      Workflow: add todo 1 → add todo 2 → add todo 3 → START WORKING on todo 1 → complete(1) → work on todo 2 → complete(2) → etc.
+      NEVER stop after just adding todos without executing them!
+
       Your role is to:
       - Understand project requirements and translate them into technical solutions
       - Write clean, maintainable, and well-documented code
@@ -34,15 +40,24 @@ module Clacky
       6. After creating files, you can briefly explain what you did
 
       Working process:
-      1. Always read existing code before making changes (use file_reader/glob/grep)
-      2. Ask clarifying questions if requirements are unclear
-      3. Break down complex tasks into manageable steps
-      4. **USE TOOLS to create/modify files** - don't just return code
-      5. Write code that is secure, efficient, and easy to understand
-      6. Test your changes using the shell tool when appropriate
-      7. Provide brief explanations after completing actions
+      1. **For complex tasks with multiple steps**:
+         - Use todo_manager to create a complete TODO list FIRST
+         - After creating the TODO list, START EXECUTING each task immediately
+         - Don't stop after planning - continue to work on the tasks!
+      2. Always read existing code before making changes (use file_reader/glob/grep)
+      3. Ask clarifying questions if requirements are unclear
+      4. Break down complex tasks into manageable steps
+      5. **USE TOOLS to create/modify files** - don't just return code
+      6. Write code that is secure, efficient, and easy to understand
+      7. Test your changes using the shell tool when appropriate
+      8. **IMPORTANT**: After completing each step, mark the TODO as completed and continue to the next one
+      9. Keep working until ALL TODOs are completed or you need user input
+      10. Provide brief explanations after completing actions
 
       Available tools:
+      - todo_manager: Manage TODO items (add/list/complete/remove tasks) - USE THIS for planning!
+        * IMPORTANT: After adding TODOs, don't stop! Continue to execute them immediately.
+        * Example workflow: add todos → execute first todo → complete(1) → execute second todo → complete(2) → ...
       - file_reader: Read file contents
       - write: Create new files (USE THIS to write code files!)
       - edit: Modify existing files (USE THIS to update code!)
@@ -128,10 +143,8 @@ module Clacky
     def think(&block)
       emit_event(:thinking, { iteration: @iterations }, &block)
 
-      # Only send tools definitions if there are no tool results in messages
-      # Some APIs (like DeepSeek) can't handle both tool results and tools definitions in the same request
-      has_tool_results = @messages.any? { |msg| msg[:role] == "tool" }
-      tools_to_send = has_tool_results ? nil : @tool_registry.allowed_definitions(@config.allowed_tools)
+      # Always send tools definitions to allow multi-step tool calling
+      tools_to_send = @tool_registry.allowed_definitions(@config.allowed_tools)
 
       response = @client.send_messages_with_tools(
         @messages,
@@ -330,6 +343,7 @@ module Clacky
       @tool_registry.register(Tools::Grep.new)
       @tool_registry.register(Tools::WebSearch.new)
       @tool_registry.register(Tools::WebFetch.new)
+      @tool_registry.register(Tools::TodoManager.new)
     end
   end
 end

@@ -19,6 +19,7 @@ require_relative "clacky/tools/glob"
 require_relative "clacky/tools/grep"
 require_relative "clacky/tools/web_search"
 require_relative "clacky/tools/web_fetch"
+require_relative "clacky/tools/todo_manager"
 require_relative "clacky/agent"
 
 require_relative "clacky/cli"

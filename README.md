@@ -33,7 +33,7 @@ For development from source:
 git clone https://github.com/yafeilee/clacky.git
 cd clacky
 bundle install
-bundle exec exe/clacky
+bin/clacky
 ```
 
 ## Configuration
@@ -142,6 +142,7 @@ clacky tools --category file_system
 
 #### Built-in Tools
 
+- **todo_manager** - Manage TODO items for task planning and tracking
 - **file_reader** - Read file contents
 - **write** - Create or overwrite files
 - **edit** - Make precise edits to existing files
@@ -207,6 +208,15 @@ clacky agent --tools file_reader glob grep
 # > Find all TODO comments
 # > Search for FIXME comments
 # > exit
+
+# Using TODO manager for complex tasks
+clacky agent "Implement a new feature with user authentication"
+# Agent will:
+# 1. Use todo_manager to create a task plan
+# 2. Add todos: "Research current auth patterns", "Design auth flow", etc.
+# 3. Complete each todo step by step
+# 4. Mark todos as completed as work progresses
+# > exit
 ```
 
 ## Development
@@ -214,6 +224,19 @@ clacky agent --tools file_reader glob grep
 After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
 
 To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and the created tag, and push the `.gem` file to [rubygems.org](https://rubygems.org).
+
+### Testing Agent Features
+
+After making changes to agent-related functionality (tools, system prompts, agent logic, etc.), test with this command:
+
+```bash
+# Test agent with a complex multi-step task using auto-approve mode
+echo "Create a simple calculator project with index.html, style.css, and script.js files" | \
+  bin/clacky agent --mode=auto_approve --path=tmp --max-iterations=20
+
+# Expected: Agent should plan tasks (add TODOs), execute them (create files),
+# and track progress (mark TODOs as completed)
+```
 
 ## Contributing
 
