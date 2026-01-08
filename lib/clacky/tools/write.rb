@@ -48,6 +48,18 @@ module Clacky
           { error: "Failed to write file: #{e.message}" }
         end
       end
+
+      def format_call(args)
+        path = args[:path] || args['path']
+        "Write(#{File.basename(path)})"
+      end
+
+      def format_result(result)
+        return result[:error] if result[:error]
+
+        bytes = result[:bytes_written] || result['bytes_written'] || 0
+        "Written #{bytes} bytes"
+      end
     end
   end
 end

@@ -55,6 +55,28 @@ module Clacky
           }
         end
       end
+
+      def format_call(args)
+        cmd = args[:command] || args['command'] || ''
+        cmd_parts = cmd.split
+        cmd_short = cmd_parts.first(3).join(' ')
+        cmd_short += '...' if cmd_parts.size > 3
+        "Shell(#{cmd_short})"
+      end
+
+      def format_result(result)
+        exit_code = result[:exit_code] || result['exit_code'] || 0
+        stdout = result[:stdout] || result['stdout'] || ""
+        stderr = result[:stderr] || result['stderr'] || ""
+
+        if exit_code == 0
+          lines = stdout.lines.size
+          "✓ Completed#{lines > 0 ? " (#{lines} lines)" : ''}"
+        else
+          error_msg = stderr.lines.first&.strip || "Failed"
+          "✗ Exit #{exit_code}: #{error_msg[0..50]}"
+        end
+      end
     end
   end
 end

@@ -83,6 +83,18 @@ module Clacky
           { error: "Failed to edit file: #{e.message}" }
         end
       end
+
+      def format_call(args)
+        path = args[:file_path] || args['file_path'] || args[:path] || args['path']
+        "Edit(#{File.basename(path)})"
+      end
+
+      def format_result(result)
+        return result[:error] if result[:error]
+
+        replacements = result[:replacements] || result['replacements'] || 1
+        "Modified #{replacements} occurrence#{replacements > 1 ? 's' : ''}"
+      end
     end
   end
 end

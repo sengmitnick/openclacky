@@ -197,30 +197,120 @@ module Clacky
       end
 
       def display_agent_event(event)
-      case event[:type]
-      when :thinking
-        print "💭 Thinking... "
-      when :tool_call
-        data = event[:data]
-        say "\n🔧 Using tool: #{data[:name]}", :yellow
-        say "   Arguments: #{data[:arguments]}", :white if options[:verbose]
-      when :observation
-        data = event[:data]
-        say "👀 Result from #{data[:tool]}:", :cyan
-        result_preview = data[:result].to_s[0..200]
-        say "   #{result_preview}#{'...' if data[:result].to_s.length > 200}", :white
-      when :answer
-        say "\n✅ Agent: #{event[:data][:content]}", :green
-      when :tool_denied
-        say "\n🚫 Tool denied: #{event[:data][:name]}", :red
-      when :tool_planned
-        say "\n📋 Planned: #{event[:data][:name]}", :blue
-      when :tool_error
-        say "\n❌ Tool error: #{event[:data][:error].message}", :red
-      when :on_iteration
-        say "\n--- Iteration #{event[:data][:iteration]} ---", :yellow if options[:verbose]
+        case event[:type]
+        when :thinking
+          print "💭 "
+        when :tool_call
+          display_tool_call(event[:data])
+        when :observation
+          display_tool_result(event[:data])
+          # Auto-display TODO status if exists
+          display_todo_status_if_exists
+        when :answer
+          say "\n⏺ #{event[:data][:content]}", :white if event[:data][:content] && !event[:data][:content].empty?
+        when :tool_denied
+          say "\n⏺ Tool denied: #{event[:data][:name]}", :red
+        when :tool_planned
+          say "\n⏺ Planned: #{event[:data][:name]}", :blue
+        when :tool_error
+          say "\n⏺ Error: #{event[:data][:error].message}", :red
+        when :on_iteration
+          say "\n--- Iteration #{event[:data][:iteration]} ---", :yellow if options[:verbose]
+        end
       end
-    end
+
+      def display_tool_call(data)
+        tool_name = data[:name]
+        args_json = data[:arguments]
+
+        # Get tool instance to use its format_call method
+        tool = get_tool_instance(tool_name)
+        if tool
+          begin
+            args = JSON.parse(args_json, symbolize_names: true)
+            formatted = tool.format_call(args)
+            say "\n⏺ #{formatted}", :cyan
+          rescue JSON::ParserError, StandardError
+            say "\n⏺ #{tool_name}(...)", :cyan
+          end
+        else
+          say "\n⏺ #{tool_name}(...)", :cyan
+        end
+
+        # Show verbose details if requested
+        if options[:verbose]
+          say "   Arguments: #{args_json[0..200]}", :white
+        end
+      end
+
+      def display_tool_result(data)
+        tool_name = data[:tool]
+        result = data[:result]
+
+        # Get tool instance to use its format_result method
+        tool = get_tool_instance(tool_name)
+        if tool
+          begin
+            summary = tool.format_result(result)
+            say "  ⎿ #{summary}", :white
+          rescue StandardError => e
+            say "  ⎿ Done", :white
+          end
+        else
+          # Fallback for unknown tools
+          result_str = result.to_s
+          summary = result_str.length > 100 ? "#{result_str[0..100]}..." : result_str
+          say "  ⎿ #{summary}", :white
+        end
+
+        # Show verbose details if requested
+        if options[:verbose] && result.is_a?(Hash)
+          say "     #{result.inspect[0..200]}", :white
+        end
+      end
+
+      def get_tool_instance(tool_name)
+        # Use metaprogramming to find tool class by name
+        # Convert tool_name to class name (e.g., "file_reader" -> "FileReader")
+        class_name = tool_name.split('_').map(&:capitalize).join
+
+        # Try to find the class in Clacky::Tools namespace
+        if Clacky::Tools.const_defined?(class_name)
+          tool_class = Clacky::Tools.const_get(class_name)
+          tool_class.new
+        else
+          nil
+        end
+      rescue NameError
+        nil
+      end
+
+      def display_todo_status_if_exists
+        return unless @current_agent
+
+        todos = @current_agent.todos
+        return if todos.empty?
+
+        # Count statuses
+        completed = todos.count { |t| t[:status] == "completed" }
+        total = todos.size
+
+        # Build progress bar
+        progress_bar = todos.map { |t| t[:status] == "completed" ? "✓" : "○" }.join
+
+        # Find current and next tasks
+        current_task = todos.find { |t| t[:status] == "pending" }
+        next_task_index = todos.index(current_task)
+        next_task = next_task_index && todos[next_task_index + 1]
+
+        say "\n📋 Tasks [#{completed}/#{total}]: #{progress_bar}", :yellow
+        if current_task
+          say "   → #{current_task[:task]}", :white
+        end
+        if next_task && next_task[:status] == "pending"
+          say "   ⇢ #{next_task[:task]}", :white
+        end
+      end
 
       def display_agent_result(result)
         say "\n" + ("=" * 60), :cyan
@@ -266,6 +356,9 @@ module Clacky
       end
 
       def run_agent_interactive(agent, working_dir, agent_config, initial_message = nil, session_manager = nil)
+        # Store agent as instance variable for access in display methods
+        @current_agent = agent
+
         # Show session info if continuing
         if agent.total_tasks > 0
           say "📂 Continuing session: #{agent.session_id[0..7]}", :green

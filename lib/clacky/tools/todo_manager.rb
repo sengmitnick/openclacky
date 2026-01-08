@@ -29,18 +29,14 @@ module Clacky
           id: {
             type: "integer",
             description: "The task ID (required for 'complete' and 'remove' actions)"
-          },
-          work_dir: {
-            type: "string",
-            description: "Working directory for storing todos (defaults to current directory)"
           }
         },
         required: ["action"]
       }
 
-      def execute(action:, task: nil, tasks: nil, id: nil, work_dir: nil)
-        @work_dir = work_dir || Dir.pwd
-        @todo_file = File.join(@work_dir, ".clacky_todos.json")
+      def execute(action:, task: nil, tasks: nil, id: nil, todos_storage: nil)
+        # todos_storage is injected by Agent, stores todos in memory
+        @todos = todos_storage || []
 
         case action
         when "add"
@@ -61,15 +57,13 @@ module Clacky
       private
 
       def load_todos
-        return [] unless File.exist?(@todo_file)
-
-        JSON.parse(File.read(@todo_file), symbolize_names: true)
-      rescue JSON::ParserError
-        []
+        @todos
       end
 
       def save_todos(todos)
-        File.write(@todo_file, JSON.pretty_generate(todos))
+        # Modify the array in-place so Agent's @todos is updated
+        # Important: Don't use @todos.clear first because todos might be @todos itself!
+        @todos.replace(todos)
       end
 
       def add_todos(task: nil, tasks: nil)
@@ -145,19 +139,11 @@ module Clacky
         todo[:completed_at] = Time.now.iso8601
         save_todos(todos)
 
-        # Build response with rules reminder
-        response = {
+        {
           message: "Task marked as completed",
-          todo: todo
+          todo: todo,
+          reminder: "⚠️ REMINDER: Check the PROJECT-SPECIFIC RULES section in your system prompt before continuing to the next task"
         }
-
-        # Add reminder to check project rules in system prompt
-        rules_file = File.join(@work_dir, ".clackyrules")
-        if File.exist?(rules_file)
-          response[:reminder] = "⚠️ REMINDER: Check the PROJECT-SPECIFIC RULES section in your system prompt before continuing to the next task!"
-        end
-
-        response
       end
 
       def remove_todo(id)
@@ -182,12 +168,42 @@ module Clacky
         todos = load_todos
         count = todos.size
 
-        File.delete(@todo_file) if File.exist?(@todo_file)
+        # Clear the in-memory storage
+        save_todos([])
 
         {
           message: "All TODOs cleared",
           cleared_count: count
         }
+      end
+
+      def format_call(args)
+        action = args[:action] || args['action']
+        case action
+        when 'add'
+          count = (args[:tasks] || args['tasks'])&.size || 1
+          "TodoManager(add #{count} task#{count > 1 ? 's' : ''})"
+        when 'complete'
+          "TodoManager(complete ##{args[:id] || args['id']})"
+        when 'list'
+          "TodoManager(list)"
+        when 'remove'
+          "TodoManager(remove ##{args[:id] || args['id']})"
+        when 'clear'
+          "TodoManager(clear all)"
+        else
+          "TodoManager(#{action})"
+        end
+      end
+
+      def format_result(result)
+        return result[:error] if result[:error]
+
+        if result[:message]
+          result[:message]
+        else
+          "Done"
+        end
       end
     end
   end

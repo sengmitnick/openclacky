@@ -5,7 +5,7 @@ require "json"
 
 module Clacky
   class Agent
-    attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks
+    attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos
 
     # Pricing per 1M tokens (approximate - adjust based on actual model)
     PRICING = {
@@ -78,6 +78,7 @@ module Clacky
       @hooks = HookManager.new
       @session_id = SecureRandom.uuid
       @messages = []
+      @todos = []  # Store todos in memory
       @iterations = 0
       @total_cost = 0.0
       @start_time = nil
@@ -99,6 +100,7 @@ module Clacky
     def restore_session(session_data)
       @session_id = session_data[:session_id]
       @messages = session_data[:messages]
+      @todos = session_data[:todos] || []  # Restore todos from session
       @iterations = session_data.dig(:stats, :total_iterations) || 0
       @total_cost = session_data.dig(:stats, :total_cost_usd) || 0.0
       @working_dir = session_data[:working_dir]
@@ -190,6 +192,7 @@ module Clacky
         created_at: @created_at,
         updated_at: Time.now.iso8601,
         working_dir: @working_dir,
+        todos: @todos,  # Include todos in session data
         config: {
           model: @config.model,
           permission_mode: @config.permission_mode.to_s,
@@ -308,6 +311,12 @@ module Clacky
         begin
           tool = @tool_registry.get(call[:name])
           args = JSON.parse(call[:arguments], symbolize_names: true)
+
+          # Special handling for TodoManager: inject todos array
+          if call[:name] == "todo_manager"
+            args[:todos_storage] = @todos
+          end
+
           result = tool.execute(**args)
 
           # Hook: after_tool_use

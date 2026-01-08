@@ -28,6 +28,26 @@ module Clacky
         raise NotImplementedError, "#{self.class.name} must implement #execute"
       end
 
+      # Format tool call for display - can be overridden by subclasses
+      # @param args [Hash] The arguments passed to the tool
+      # @return [String] Formatted call description (e.g., "Read(file.rb)")
+      def format_call(args)
+        "#{name}(...)"
+      end
+
+      # Format tool result for display - can be overridden by subclasses
+      # @param result [Object] The result returned by execute
+      # @return [String] Formatted result summary (e.g., "Read 150 lines")
+      def format_result(result)
+        if result.is_a?(Hash) && result[:message]
+          result[:message]
+        elsif result.is_a?(String)
+          result.length > 100 ? "#{result[0..100]}..." : result
+        else
+          "Done"
+        end
+      end
+
       # Convert to OpenAI function calling format
       def to_function_definition
         {

@@ -61,6 +61,19 @@ module Clacky
           }
         end
       end
+
+      def format_call(args)
+        path = args[:path] || args['path']
+        "Read(#{File.basename(path)})"
+      end
+
+      def format_result(result)
+        return result[:error] if result[:error]
+
+        lines = result[:lines_read] || result['lines_read'] || 0
+        truncated = result[:truncated] || result['truncated']
+        "Read #{lines} lines#{truncated ? ' (truncated)' : ''}"
+      end
     end
   end
 end
