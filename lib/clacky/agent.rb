@@ -2,6 +2,7 @@
 
 require "securerandom"
 require "json"
+require "readline"
 require_relative "utils/arguments_parser"
 
 module Clacky
@@ -554,9 +555,10 @@ module Clacky
       # Then show the confirmation prompt with better formatting
       prompt_text = format_tool_prompt(call)
       puts "\n❓ #{prompt_text}"
-      print "   (Enter/y to approve, n to deny, or provide feedback): "
-
-      response = $stdin.gets
+      
+      # Use Readline for better input handling (backspace, arrow keys, etc.)
+      response = Readline.readline("   (Enter/y to approve, n to deny, or provide feedback): ", false)
+      
       if response.nil?  # Handle EOF/pipe input
         return { approved: false, feedback: nil }
       end
@@ -581,7 +583,15 @@ module Clacky
     def format_tool_prompt(call)
       begin
         args = JSON.parse(call[:arguments], symbolize_names: true)
+        
+        # Try to use tool's format_call method for better formatting
+        tool = @tool_registry.get(call[:name]) rescue nil
+        if tool
+          formatted = tool.format_call(args) rescue nil
+          return formatted if formatted
+        end
 
+        # Fallback to manual formatting for common tools
         case call[:name]
         when "edit"
           path = args[:path] || args[:file_path]
@@ -594,8 +604,10 @@ module Clacky
           else
             "Write(#{filename}) - create new"
           end
-        when "shell"
-          "Shell(#{args[:command]&.split&.first || 'command'})"
+        when "shell", "safe_shell"
+          cmd = args[:command] || ''
+          display_cmd = cmd.length > 30 ? "#{cmd[0..27]}..." : cmd
+          "#{call[:name]}(\"#{display_cmd}\")"
         else
           "Allow #{call[:name]}"
         end
@@ -613,10 +625,17 @@ module Clacky
           show_write_preview(args)
         when "edit"
           show_edit_preview(args)
-        when "shell"
+        when "shell", "safe_shell"
           show_shell_preview(args)
         else
-          puts "\nArgs: #{call[:arguments]}"
+          # For other tools, show formatted arguments
+          tool = @tool_registry.get(call[:name]) rescue nil
+          if tool
+            formatted = tool.format_call(args) rescue "#{call[:name]}(...)"
+            puts "\nArgs: #{formatted}"
+          else
+            puts "\nArgs: #{call[:arguments]}"
+          end
         end
       rescue JSON::ParserError
         puts "   Args: #{call[:arguments]}"
@@ -649,13 +668,33 @@ module Clacky
 
       puts "\n📝 File: #{path || '(unknown)'}"
 
-      if path && File.exist?(path)
-        file_content = File.read(path)
-        new_content = file_content.sub(old_string, new_string)
-        show_diff(file_content, new_content, max_lines: 50)
-      else
-        puts "   ⚠️  File not found"
+      if !path || path.empty?
+        puts "   ⚠️  No file path provided"
+        return
       end
+
+      unless File.exist?(path)
+        puts "   ⚠️  File not found: #{path}"
+        return
+      end
+
+      if old_string.empty?
+        puts "   ⚠️  No old_string provided (nothing to replace)"
+        return
+      end
+
+      file_content = File.read(path)
+      
+      # Check if old_string exists in file
+      unless file_content.include?(old_string)
+        puts "   ⚠️  String to replace not found in file"
+        puts "   Looking for (first 100 chars):"
+        puts "   #{old_string[0..100].inspect}"
+        return
+      end
+
+      new_content = file_content.sub(old_string, new_string)
+      show_diff(file_content, new_content, max_lines: 50)
     end
 
     def show_shell_preview(args)

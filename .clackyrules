@@ -1,0 +1,77 @@
+# Clacky Project Rules (.clackyrules)
+
+## Project Overview
+This is the `clacky` Ruby gem - a command-line interface for interacting with AI models (Claude, OpenAI, etc.).
+It provides chat functionality and autonomous AI agent capabilities with tool use.
+
+## Project Structure
+- `lib/clacky/` - Main gem source code
+  - `cli.rb` - Command-line interface using Thor
+  - `agent.rb` - Core AI agent with tool execution
+  - `tools/` - Built-in tools (file operations, web search, shell, etc.)
+  - `client.rb` - API client for AI models
+  - `config.rb` - Configuration management
+- `bin/` - Development executables
+- `spec/` - RSpec test suite
+- `clacky.gemspec` - Gem specification
+
+## Development Guidelines
+
+### Code Style
+- Follow Ruby conventions and best practices
+- Use frozen string literals: `# frozen_string_literal: true`
+- Keep classes focused and single-responsibility
+- Use meaningful variable and method names
+- Add descriptive comments for complex logic
+
+### Architecture Patterns
+- Tools inherit from `Clacky::Tools::Base`
+- Each tool defines: `tool_name`, `tool_description`, `tool_category`, `tool_parameters`
+- Agent uses React pattern (Reason-Act-Observe) for task execution
+- Configuration is managed through `Clacky::Config`
+- CLI commands use Thor framework
+
+### Testing
+- Use RSpec for testing
+- Test files in `spec/` directory
+- Run tests with: `bundle exec rspec`
+- Maintain good test coverage
+
+### Tool Development
+When adding new tools:
+1. Create class in `lib/clacky/tools/`
+2. Inherit from `Clacky::Tools::Base`
+3. Define required class attributes
+4. Implement `execute` method
+5. Add optional `format_call` and `format_result` methods
+6. Require in `lib/clacky.rb`
+
+### Agent Behavior
+- TODO manager is for planning only - must execute tasks after planning
+- Always use tools to create/modify files, don't just return code
+- Maintain conversation context across tasks
+- Follow cost and iteration limits
+- Support different permission modes (confirm_all, confirm_edits, auto_approve, plan_only)
+
+## Dependencies
+- Ruby >= 3.1.0
+- faraday (~> 2.0) - HTTP client
+- thor (~> 1.3) - CLI framework
+- tty-prompt (~> 0.23) - Interactive prompts
+- tty-spinner (~> 0.9) - Progress indicators
+- diffy (~> 3.4) - Text diffs
+
+## Important Notes
+- This gem is designed to work with OpenAI-compatible APIs
+- Security features include safe shell execution and path validation
+- Agent includes cost control and message compression features
+- Built-in tools cover file operations, web search, code execution, and project management
+
+## Execution Binary
+- Development: `bin/clacky` (in repository)
+- Installed gem: `clacky` command globally available
+
+## Configuration
+- Stores API keys and settings in user's home directory
+- Supports multiple AI model providers
+- Configurable through `clacky config set` command
