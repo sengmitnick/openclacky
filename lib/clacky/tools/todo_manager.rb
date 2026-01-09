@@ -139,11 +139,29 @@ module Clacky
         todo[:completed_at] = Time.now.iso8601
         save_todos(todos)
 
-        {
+        # Find the next pending task
+        next_pending = todos.find { |t| t[:status] == "pending" }
+        
+        # Count statistics
+        completed_count = todos.count { |t| t[:status] == "completed" }
+        total_count = todos.size
+
+        result = {
           message: "Task marked as completed",
           todo: todo,
+          progress: "#{completed_count}/#{total_count}",
           reminder: "⚠️ REMINDER: Check the PROJECT-SPECIFIC RULES section in your system prompt before continuing to the next task"
         }
+
+        if next_pending
+          result[:next_task] = next_pending
+          result[:next_task_info] = "✅ Progress: #{completed_count}/#{total_count}. Next task: ##{next_pending[:id]} - #{next_pending[:task]}"
+        else
+          result[:all_completed] = true
+          result[:completion_message] = "🎉 All tasks completed! (#{completed_count}/#{total_count})"
+        end
+
+        result
       end
 
       def remove_todo(id)

@@ -17,18 +17,8 @@ module Clacky
 
     # System prompt for the coding agent
     SYSTEM_PROMPT = <<~PROMPT.freeze
-      You are OpenClacky, an AI coding assistant and technical co-founder, designed to help non-technical 
+      You are OpenClacky, an AI coding assistant and technical co-founder, designed to help non-technical
       users complete software development projects. You are responsible for development in the current project.
-      
-      IMPORTANT: You should frequently refer to the existing codebase. For unclear instructions, 
-      prioritize understanding the codebase first before answering or taking action.
-      Always read relevant code files to understand the project structure, patterns, and conventions.
-
-      ⚠️ CRITICAL RULE FOR TODO MANAGER:
-      When using todo_manager to add tasks, you MUST continue working immediately after adding ALL todos.
-      Adding todos is NOT completion - it's just the planning phase!
-      Workflow: add todo 1 → add todo 2 → add todo 3 → START WORKING on todo 1 → complete(1) → work on todo 2 → complete(2) → etc.
-      NEVER stop after just adding todos without executing them!
 
       Your role is to:
       - Understand project requirements and translate them into technical solutions
@@ -37,14 +27,6 @@ module Clacky
       - Explain technical concepts in simple terms when needed
       - Proactively identify potential issues and suggest improvements
       - Help with debugging, testing, and deployment
-
-      CRITICAL RULES:
-      1. **ALWAYS USE TOOLS** - Don't just describe or return code, USE THE TOOLS to actually create/modify files
-      2. When asked to "write" or "create" code - use the `write` tool to create the actual file
-      3. When asked to "modify" or "update" code - use the `edit` tool to change the actual file
-      4. When asked to "run" or "execute" - use the `shell` tool to run the actual command
-      5. Never just print code in your response - always create the actual files using tools
-      6. After creating files, you can briefly explain what you did
 
       Working process:
       1. **For complex tasks with multiple steps**:
@@ -61,21 +43,15 @@ module Clacky
       9. Keep working until ALL TODOs are completed or you need user input
       10. Provide brief explanations after completing actions
 
-      Available tools:
-      - todo_manager: Manage TODO items (add/list/complete/remove tasks) - USE THIS for planning!
-        * IMPORTANT: After adding TODOs, don't stop! Continue to execute them immediately.
-        * Example workflow: add todos → execute first todo → complete(1) → execute second todo → complete(2) → ...
-      - file_reader: Read file contents
-      - write: Create new files (USE THIS to write code files!)
-      - edit: Modify existing files (USE THIS to update code!)
-      - glob: Find files by pattern
-      - grep: Search for text in files
-      - shell: Execute shell commands (USE THIS to run programs!)
+      IMPORTANT: You should frequently refer to the existing codebase. For unclear instructions,
+      prioritize understanding the codebase first before answering or taking action.
+      Always read relevant code files to understand the project structure, patterns, and conventions.
 
-      - web_search: Search the web for information
-      - web_fetch: Fetch content from URLs
-
-      Remember: You are an ACTION-ORIENTED agent. When users ask you to do something, DO IT using tools, don't just talk about it!
+      CRITICAL RULE FOR TODO MANAGER:
+      When using todo_manager to add tasks, you MUST continue working immediately after adding ALL todos.
+      Adding todos is NOT completion - it's just the planning phase!
+      Workflow: add todo 1 → add todo 2 → add todo 3 → START WORKING on todo 1 → complete(1) → work on todo 2 → complete(2) → etc.
+      NEVER stop after just adding todos without executing them!
     PROMPT
 
     def initialize(client, config = {}, working_dir: nil)
@@ -164,9 +140,14 @@ module Clacky
 
           # Check if user denied any tool
           if action_result[:denied]
-            # If user provided feedback, add it as a new user message and continue
+            # If user provided feedback, treat it as a user question/instruction
             if action_result[:feedback] && !action_result[:feedback].empty?
-              @messages << { role: "user", content: action_result[:feedback] }
+              # Add user feedback as a new user message
+              # Use a clear format that signals this is important user input
+              @messages << {
+                role: "user",
+                content: "STOP. The user has a question/feedback for you: #{action_result[:feedback]}\n\nPlease respond to the user's question/feedback before continuing with any actions."
+              }
               # Continue loop to let agent respond to feedback
               next
             else
@@ -192,7 +173,21 @@ module Clacky
     def to_session_data
       # Get first user message for preview
       first_user_msg = @messages.find { |m| m[:role] == "user" }
-      first_message_preview = first_user_msg ? first_user_msg[:content][0..100] : "No messages"
+
+      # Extract preview text, handling both string and array content formats
+      first_message_preview = if first_user_msg
+        content = first_user_msg[:content]
+        if content.is_a?(String)
+          content[0..100]
+        elsif content.is_a?(Array)
+          # If content is an array of blocks (e.g., tool_result blocks), summarize it
+          "User message with #{content.size} content block(s)"
+        else
+          "No messages"
+        end
+      else
+        "No messages"
+      end
 
       {
         session_id: @session_id,
@@ -301,13 +296,34 @@ module Clacky
       progress.start
 
       begin
-        response = @client.send_messages_with_tools(
-          @messages,
-          model: @config.model,
-          tools: tools_to_send,
-          max_tokens: @config.max_tokens,
-          verbose: @config.verbose
-        )
+        # Retry logic for network failures
+        max_retries = 10
+        retry_delay = 5
+        retries = 0
+
+        begin
+          response = @client.send_messages_with_tools(
+            @messages,
+            model: @config.model,
+            tools: tools_to_send,
+            max_tokens: @config.max_tokens,
+            verbose: @config.verbose
+          )
+        rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
+          retries += 1
+          if retries <= max_retries
+            progress.finish
+            puts "\n⚠️  Network request failed: #{e.class.name} - #{e.message}"
+            puts "🔄 Retry #{retries}/#{max_retries}, waiting #{retry_delay} seconds..."
+            sleep retry_delay
+            progress.start
+            retry
+          else
+            progress.finish
+            puts "\n❌ Network request failed after #{max_retries} retries, giving up"
+            raise Error, "Network connection failed after #{max_retries} retries: #{e.message}"
+          end
+        end
 
         track_cost(response[:usage])
 
@@ -335,27 +351,39 @@ module Clacky
 
       denied = false
       feedback = nil
-      results = tool_calls.map do |call|
+      results = []
+
+      tool_calls.each do |call|
         # Hook: before_tool_use
         hook_result = @hooks.trigger(:before_tool_use, call)
         if hook_result[:action] == :deny
           emit_event(:tool_denied, call, &block)
-          next build_error_result(call, hook_result[:reason] || "Tool use denied by hook")
+          results << build_error_result(call, hook_result[:reason] || "Tool use denied by hook")
+          next
         end
 
         # Permission check (if not in auto-approve mode)
         unless should_auto_execute?(call[:name], call[:arguments])
           if @config.is_plan_only?
             emit_event(:tool_planned, call, &block)
-            next build_planned_result(call)
+            results << build_planned_result(call)
+            next
           end
 
           confirmation = confirm_tool_use?(call, &block)
           unless confirmation[:approved]
             emit_event(:tool_denied, call, &block)
             denied = true
-            feedback = confirmation[:feedback] if confirmation[:feedback]
-            next build_denied_result(call)
+            user_feedback = confirmation[:feedback]
+            feedback = user_feedback if user_feedback
+            results << build_denied_result(call, user_feedback)
+
+            # If user provided feedback, stop processing remaining tools immediately
+            # Let the agent respond to the feedback in the next iteration
+            if user_feedback && !user_feedback.empty?
+              break
+            end
+            next
           end
         end
 
@@ -379,13 +407,13 @@ module Clacky
           @hooks.trigger(:after_tool_use, call, result)
 
           emit_event(:observation, { tool: call[:name], result: result }, &block)
-          build_success_result(call, result)
+          results << build_success_result(call, result)
         rescue StandardError => e
           @hooks.trigger(:on_tool_error, call, e)
           emit_event(:tool_error, { call: call, error: e }, &block)
-          build_error_result(call, e.message)
+          results << build_error_result(call, e.message)
         end
-      end.compact
+      end
 
       {
         denied: denied,
@@ -396,6 +424,7 @@ module Clacky
 
     def observe(response, tool_results)
       # Add tool results as messages
+      # Using OpenAI format which is compatible with most APIs through LiteLLM
       tool_results.each do |result|
         @messages << {
           role: "tool",
@@ -475,7 +504,7 @@ module Clacky
 
         recent.unshift(msg)
 
-        # If this is a tool result, make sure we include the corresponding assistant message with tool_calls
+        # If this is a tool result message, make sure we include the corresponding assistant message with tool_calls
         if msg[:role] == "tool"
           # Find the previous assistant message with tool_calls
           j = i - 1
@@ -555,10 +584,10 @@ module Clacky
       # Then show the confirmation prompt with better formatting
       prompt_text = format_tool_prompt(call)
       puts "\n❓ #{prompt_text}"
-      
+
       # Use Readline for better input handling (backspace, arrow keys, etc.)
-      response = Readline.readline("   (Enter/y to approve, n to deny, or provide feedback): ", false)
-      
+      response = Readline.readline("   (Enter/y to approve, n to deny, or provide feedback): ", true)
+
       if response.nil?  # Handle EOF/pipe input
         return { approved: false, feedback: nil }
       end
@@ -583,7 +612,7 @@ module Clacky
     def format_tool_prompt(call)
       begin
         args = JSON.parse(call[:arguments], symbolize_names: true)
-        
+
         # Try to use tool's format_call method for better formatting
         tool = @tool_registry.get(call[:name]) rescue nil
         if tool
@@ -684,7 +713,7 @@ module Clacky
       end
 
       file_content = File.read(path)
-      
+
       # Check if old_string exists in file
       unless file_content.include?(old_string)
         puts "   ⚠️  String to replace not found in file"
@@ -731,10 +760,19 @@ module Clacky
       }
     end
 
-    def build_denied_result(call)
+    def build_denied_result(call, user_feedback = nil)
+      message = if user_feedback && !user_feedback.empty?
+                  "Tool use denied by user. User feedback: #{user_feedback}"
+                else
+                  "Tool use denied by user"
+                end
+
       {
         id: call[:id],
-        content: JSON.generate({ error: "Tool use denied by user" })
+        content: JSON.generate({
+          error: message,
+          user_feedback: user_feedback
+        })
       }
     end
 

@@ -4,9 +4,10 @@ module Clacky
   class Conversation
     attr_reader :messages
 
-    def initialize(api_key, model: "gpt-3.5-turbo", base_url: "https://api.openai.com")
+    def initialize(api_key, model:, base_url:, max_tokens:)
       @client = Client.new(api_key, base_url: base_url)
       @model = model
+      @max_tokens = max_tokens
       @messages = []
     end
 
@@ -18,7 +19,7 @@ module Clacky
       }
 
       # Get response from Claude
-      response_text = @client.send_messages(@messages, model: @model)
+      response_text = @client.send_messages(@messages, model: @model, max_tokens: @max_tokens)
 
       # Add assistant response to history
       @messages << {

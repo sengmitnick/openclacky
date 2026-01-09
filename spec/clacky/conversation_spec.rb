@@ -2,11 +2,14 @@
 
 RSpec.describe Clacky::Conversation do
   let(:api_key) { "test-api-key" }
-  let(:conversation) { described_class.new(api_key) }
+  let(:model) { "gpt-4" }
+  let(:base_url) { "https://api.openai.com" }
+  let(:max_tokens) { 4096 }
+  let(:conversation) { described_class.new(api_key, model: model, base_url: base_url, max_tokens: max_tokens) }
   let(:client) { instance_double(Clacky::Client) }
 
   before do
-    allow(Clacky::Client).to receive(:new).with(api_key, base_url: "https://api.openai.com").and_return(client)
+    allow(Clacky::Client).to receive(:new).with(api_key, base_url: base_url).and_return(client)
   end
 
   describe "#initialize" do
@@ -15,8 +18,8 @@ RSpec.describe Clacky::Conversation do
     end
 
     it "creates a client with the provided API key" do
-      described_class.new(api_key)
-      expect(Clacky::Client).to have_received(:new).with(api_key, base_url: "https://api.openai.com")
+      described_class.new(api_key, model: model, base_url: base_url, max_tokens: max_tokens)
+      expect(Clacky::Client).to have_received(:new).with(api_key, base_url: base_url)
     end
   end
 

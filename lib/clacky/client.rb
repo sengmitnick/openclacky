@@ -5,12 +5,15 @@ require "json"
 
 module Clacky
   class Client
-    def initialize(api_key, base_url: "https://api.openai.com")
+    MAX_RETRIES = 10
+    RETRY_DELAY = 5 # seconds
+
+    def initialize(api_key, base_url:)
       @api_key = api_key
       @base_url = base_url
     end
 
-    def send_message(content, model: "gpt-3.5-turbo", max_tokens: 4096)
+    def send_message(content, model:, max_tokens:)
       response = connection.post("chat/completions") do |req|
         req.body = {
           model: model,
@@ -27,7 +30,7 @@ module Clacky
       handle_response(response)
     end
 
-    def send_messages(messages, model: "gpt-3.5-turbo", max_tokens: 4096)
+    def send_messages(messages, model:, max_tokens:)
       response = connection.post("chat/completions") do |req|
         req.body = {
           model: model,
@@ -40,7 +43,7 @@ module Clacky
     end
 
     # Send messages with function calling (tools) support
-    def send_messages_with_tools(messages, model: "gpt-3.5-turbo", tools: nil, max_tokens: 4096, verbose: false)
+    def send_messages_with_tools(messages, model:, tools:, max_tokens:, verbose: false)
       body = {
         model: model,
         max_tokens: max_tokens,

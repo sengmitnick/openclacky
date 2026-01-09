@@ -298,6 +298,12 @@ module Clacky
         # Build progress bar
         progress_bar = todos.map { |t| t[:status] == "completed" ? "✓" : "○" }.join
 
+        # Check if all completed
+        if completed == total
+          say "\n📋 Tasks [#{completed}/#{total}]: #{progress_bar} 🎉 All completed!", :green
+          return
+        end
+
         # Find current and next tasks
         current_task = todos.find { |t| t[:status] == "pending" }
         next_task_index = todos.index(current_task)
@@ -305,10 +311,10 @@ module Clacky
 
         say "\n📋 Tasks [#{completed}/#{total}]: #{progress_bar}", :yellow
         if current_task
-          say "   → #{current_task[:task]}", :white
+          say "   → Next: ##{current_task[:id]} - #{current_task[:task]}", :white
         end
         if next_task && next_task[:status] == "pending"
-          say "   ⇢ #{next_task[:task]}", :white
+          say "   ⇢ After that: ##{next_task[:id]} - #{next_task[:task]}", :white
         end
       end
 
