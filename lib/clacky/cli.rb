@@ -200,6 +200,9 @@ module Clacky
         case event[:type]
         when :thinking
           print "💭 "
+        when :assistant_message
+          # Display assistant's thinking/explanation before tool calls
+          say "\n💬 #{event[:data][:content]}", :white if event[:data][:content] && !event[:data][:content].empty?
         when :tool_call
           display_tool_call(event[:data])
         when :observation

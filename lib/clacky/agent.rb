@@ -132,6 +132,11 @@ module Clacky
             break
           end
 
+          # Emit assistant_message event if there's content before tool calls
+          if response[:content] && !response[:content].empty?
+            emit_event(:assistant_message, { content: response[:content] }, &block)
+          end
+
           # Act: Execute tool calls
           action_result = act(response[:tool_calls], &block)
 
@@ -353,7 +358,7 @@ module Clacky
       feedback = nil
       results = []
 
-      tool_calls.each do |call|
+      tool_calls.each_with_index do |call, index|
         # Hook: before_tool_use
         hook_result = @hooks.trigger(:before_tool_use, call)
         if hook_result[:action] == :deny
@@ -381,6 +386,11 @@ module Clacky
             # If user provided feedback, stop processing remaining tools immediately
             # Let the agent respond to the feedback in the next iteration
             if user_feedback && !user_feedback.empty?
+              # Fill in denied results for all remaining tool calls to avoid mismatch
+              remaining_calls = tool_calls[(index + 1)..-1] || []
+              remaining_calls.each do |remaining_call|
+                results << build_denied_result(remaining_call, "Auto-denied due to user feedback on previous tool")
+              end
               break
             end
             next
@@ -483,6 +493,13 @@ module Clacky
 
       # Create summary of compressed messages
       summary = summarize_messages(messages_to_compress)
+
+      # Show summary in verbose mode
+      if @config.verbose
+        puts "\n[COMPRESSION SUMMARY]"
+        puts summary[:content]
+        puts ""
+      end
 
       # Rebuild messages array: [system, summary, recent_messages]
       @messages = [system_msg, summary, *recent_messages].compact
