@@ -34,8 +34,11 @@ It provides chat functionality and autonomous AI agent capabilities with tool us
 ### Testing
 - Use RSpec for testing
 - Test files in `spec/` directory
-- Run tests with: `bundle exec rspec`
+- **IMPORTANT**: Always run `bundle exec rspec` to verify tests pass after making changes
+- All tests must pass before considering a task complete
 - Maintain good test coverage
+- When modifying existing functionality, ensure related tests still pass
+- When adding new features, consider adding corresponding tests
 
 ### Tool Development
 When adding new tools:
