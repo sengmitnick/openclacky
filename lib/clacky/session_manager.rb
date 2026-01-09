@@ -19,7 +19,13 @@ module Clacky
       File.write(filepath, JSON.pretty_generate(session_data))
       FileUtils.chmod(0o600, filepath)
 
+      @last_saved_path = filepath
       filepath
+    end
+
+    # Get the path of the last saved session
+    def last_saved_path
+      @last_saved_path
     end
 
     # Load a specific session by ID
@@ -61,6 +67,28 @@ module Clacky
 
         updated_at = Time.parse(session[:updated_at])
         if updated_at < cutoff_time
+          File.delete(filepath)
+          deleted_count += 1
+        end
+      end
+
+      deleted_count
+    end
+
+    # Keep only the most recent N sessions, delete older ones
+    def cleanup_by_count(keep:)
+      sessions = all_sessions.sort_by { |s| Time.parse(s[:updated_at]) }.reverse
+
+      return 0 if sessions.size <= keep
+
+      sessions_to_delete = sessions[keep..]
+      deleted_count = 0
+
+      sessions_to_delete.each do |session|
+        filename = generate_filename(session[:session_id], session[:created_at])
+        filepath = File.join(SESSIONS_DIR, filename)
+
+        if File.exist?(filepath)
           File.delete(filepath)
           deleted_count += 1
         end

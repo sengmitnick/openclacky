@@ -599,8 +599,26 @@ module Clacky
     def confirm_tool_use?(call, &block)
       emit_event(:tool_confirmation_required, call, &block)
 
-      # Show preview first
-      show_tool_preview(call)
+      # Show preview first and check for errors
+      preview_error = show_tool_preview(call)
+
+      # If preview detected an error (e.g., edit with non-existent string),
+      # auto-deny and provide detailed feedback
+      if preview_error && preview_error[:error]
+        puts "\n❌ Tool call auto-denied due to preview error"
+        
+        # Build helpful feedback message
+        feedback = case call[:name]
+        when "edit"
+          "The edit operation will fail because the old_string was not found in the file. " \
+          "Please use file_reader to read '#{preview_error[:path]}' first, " \
+          "find the correct string to replace, and try again with the exact string (including whitespace)."
+        else
+          "Tool preview error: #{preview_error[:error]}"
+        end
+
+        return { approved: false, feedback: feedback }
+      end
 
       # Then show the confirmation prompt with better formatting
       prompt_text = format_tool_prompt(call)
@@ -670,13 +688,14 @@ module Clacky
       begin
         args = JSON.parse(call[:arguments], symbolize_names: true)
 
+        preview_error = nil
         case call[:name]
         when "write"
-          show_write_preview(args)
+          preview_error = show_write_preview(args)
         when "edit"
-          show_edit_preview(args)
+          preview_error = show_edit_preview(args)
         when "shell", "safe_shell"
-          show_shell_preview(args)
+          preview_error = show_shell_preview(args)
         else
           # For other tools, show formatted arguments
           tool = @tool_registry.get(call[:name]) rescue nil
@@ -687,8 +706,11 @@ module Clacky
             puts "\nArgs: #{call[:arguments]}"
           end
         end
+
+        return preview_error
       rescue JSON::ParserError
         puts "   Args: #{call[:arguments]}"
+        return nil
       end
     end
 
@@ -718,17 +740,17 @@ module Clacky
 
       if !path || path.empty?
         puts "   ⚠️  No file path provided"
-        return
+        return { error: "No file path provided for edit operation" }
       end
 
       unless File.exist?(path)
         puts "   ⚠️  File not found: #{path}"
-        return
+        return { error: "File not found: #{path}" }
       end
 
       if old_string.empty?
         puts "   ⚠️  No old_string provided (nothing to replace)"
-        return
+        return { error: "No old_string provided (nothing to replace)" }
       end
 
       file_content = File.read(path)
@@ -738,11 +760,16 @@ module Clacky
         puts "   ⚠️  String to replace not found in file"
         puts "   Looking for (first 100 chars):"
         puts "   #{old_string[0..100].inspect}"
-        return
+        return {
+          error: "String to replace not found in file",
+          path: path,
+          looking_for: old_string[0..200]
+        }
       end
 
       new_content = file_content.sub(old_string, new_string)
       show_diff(file_content, new_content, max_lines: 50)
+      nil  # No error
     end
 
     def show_shell_preview(args)

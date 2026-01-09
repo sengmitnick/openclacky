@@ -133,6 +133,9 @@ module Clacky
       rescue StandardError => e
         say "\n❌ Error: #{e.message}", :red
         say e.backtrace.first(5).join("\n"), :red if options[:verbose]
+        if session_manager&.last_saved_path
+          say "📂 Session saved: #{session_manager.last_saved_path}", :yellow
+        end
         exit 1
       ensure
         Dir.chdir(original_dir)
@@ -432,14 +435,21 @@ module Clacky
             # Save session on interruption
             if session_manager
               session_manager.save(agent.to_session_data)
+              say "\n\n⚠️  Task interrupted by user (Ctrl+C)", :yellow
+              say "📂 Session saved: #{session_manager.last_saved_path}", :yellow
+              say "You can start a new task or type 'exit' to quit.\n", :yellow
             end
-
-            # User pressed Ctrl+C - stop current task but don't exit
-            say "\n\n⚠️  Task interrupted by user (Ctrl+C)", :yellow
-            say "Session saved. You can start a new task or type 'exit' to quit.\n", :yellow
           rescue StandardError => e
+            # Save session on error
+            if session_manager
+              session_manager.save(agent.to_session_data)
+            end
+            
             say "\n❌ Error: #{e.message}", :red
             say e.backtrace.first(3).join("\n"), :white if options[:verbose]
+            if session_manager&.last_saved_path
+              say "📂 Session saved: #{session_manager.last_saved_path}", :yellow
+            end
             say "\nYou can continue with a new task or type 'exit' to quit.", :yellow
           end
 
