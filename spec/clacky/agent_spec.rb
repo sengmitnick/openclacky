@@ -161,6 +161,184 @@ RSpec.describe Clacky::Agent do
     end
   end
 
+  describe "#get_recent_messages_with_tool_pairs" do
+    it "includes all tool results for assistant with multiple tool_calls" do
+      messages = [
+        { role: "system", content: "System prompt" },
+        { role: "user", content: "Do multiple things" },
+        {
+          role: "assistant",
+          content: nil,
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "tool_a", arguments: "{}" } },
+            { id: "call_2", type: "function", function: { name: "tool_b", arguments: "{}" } },
+            { id: "call_3", type: "function", function: { name: "tool_c", arguments: "{}" } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_1", content: "Result A" },
+        { role: "tool", tool_call_id: "call_2", content: "Result B" },
+        { role: "tool", tool_call_id: "call_3", content: "Result C" },
+        { role: "assistant", content: "Done with all three tasks" }
+      ]
+
+      # Request only 2 recent messages - should get assistant + all 3 tool results
+      recent = agent.send(:get_recent_messages_with_tool_pairs, messages, 2)
+
+      # Should include: final assistant, the 3 tool results, and the assistant with tool_calls
+      expect(recent.size).to eq(5)
+      
+      # Verify order is preserved
+      expect(recent[0][:role]).to eq("assistant")
+      expect(recent[0][:tool_calls].size).to eq(3)
+      expect(recent[1][:role]).to eq("tool")
+      expect(recent[1][:tool_call_id]).to eq("call_1")
+      expect(recent[2][:role]).to eq("tool")
+      expect(recent[2][:tool_call_id]).to eq("call_2")
+      expect(recent[3][:role]).to eq("tool")
+      expect(recent[3][:tool_call_id]).to eq("call_3")
+      expect(recent[4][:role]).to eq("assistant")
+    end
+
+    it "handles multiple assistant messages with tool_calls" do
+      messages = [
+        { role: "system", content: "System" },
+        { role: "user", content: "First request" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "tool_a", arguments: "{}" } },
+            { id: "call_2", type: "function", function: { name: "tool_b", arguments: "{}" } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_1", content: "A1" },
+        { role: "tool", tool_call_id: "call_2", content: "B1" },
+        { role: "assistant", content: "First done" },
+        { role: "user", content: "Second request" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_3", type: "function", function: { name: "tool_c", arguments: "{}" } },
+            { id: "call_4", type: "function", function: { name: "tool_d", arguments: "{}" } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_3", content: "C1" },
+        { role: "tool", tool_call_id: "call_4", content: "D1" },
+        { role: "assistant", content: "Second done" }
+      ]
+
+      # Request 3 recent messages
+      recent = agent.send(:get_recent_messages_with_tool_pairs, messages, 3)
+
+      # Should include: last assistant + the 2 tool results before it + assistant with tool_calls
+      expect(recent.size).to eq(4)
+      expect(recent.map { |m| m[:role] }).to eq(["assistant", "tool", "tool", "assistant"])
+      expect(recent[0][:tool_calls].map { |tc| tc[:id] }).to eq(["call_3", "call_4"])
+    end
+
+    it "maintains correct order when encountering tool results" do
+      messages = [
+        { role: "system", content: "System" },
+        { role: "user", content: "Request" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "file_reader", arguments: "{}" } },
+            { id: "call_2", type: "function", function: { name: "grep", arguments: "{}" } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_1", content: "File content" },
+        { role: "tool", tool_call_id: "call_2", content: "Grep results" },
+        { role: "assistant", content: "Analysis complete" }
+      ]
+
+      recent = agent.send(:get_recent_messages_with_tool_pairs, messages, 1)
+
+      # Should get the final assistant message only
+      expect(recent.size).to eq(1)
+      expect(recent[0][:content]).to eq("Analysis complete")
+    end
+
+    it "handles nested tool calls correctly" do
+      messages = [
+        { role: "system", content: "System" },
+        { role: "user", content: "Complex task" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "todo_manager", arguments: '{"action":"add"}' } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_1", content: "TODO added" },
+        { role: "assistant", content: "Now executing" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_2", type: "function", function: { name: "file_reader", arguments: "{}" } },
+            { id: "call_3", type: "function", function: { name: "edit", arguments: "{}" } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_2", content: "File read" },
+        { role: "tool", tool_call_id: "call_3", content: "Edit done" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_4", type: "function", function: { name: "todo_manager", arguments: '{"action":"complete"}' } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_4", content: "TODO completed" }
+      ]
+
+      # Request 2 recent messages - should get call_4 pair
+      recent = agent.send(:get_recent_messages_with_tool_pairs, messages, 2)
+      
+      expect(recent.size).to eq(2)
+      expect(recent[0][:tool_calls].first[:id]).to eq("call_4")
+      expect(recent[1][:tool_call_id]).to eq("call_4")
+    end
+
+    it "handles edge case with single tool call" do
+      messages = [
+        { role: "system", content: "System" },
+        { role: "user", content: "Simple request" },
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "calculator", arguments: "{}" } }
+          ]
+        },
+        { role: "tool", tool_call_id: "call_1", content: "42" },
+        { role: "assistant", content: "The answer is 42" }
+      ]
+
+      recent = agent.send(:get_recent_messages_with_tool_pairs, messages, 2)
+
+      # Should include: assistant with tool_calls, tool result, and final assistant
+      expect(recent.size).to eq(3)
+      expect(recent[0][:role]).to eq("assistant")
+      expect(recent[0][:tool_calls].first[:id]).to eq("call_1")
+      expect(recent[1][:role]).to eq("tool")
+      expect(recent[1][:tool_call_id]).to eq("call_1")
+      expect(recent[2][:role]).to eq("assistant")
+      expect(recent[2][:content]).to eq("The answer is 42")
+    end
+
+    it "returns empty array for empty messages" do
+      recent = agent.send(:get_recent_messages_with_tool_pairs, [], 5)
+      expect(recent).to eq([])
+    end
+
+    it "returns all messages when count exceeds message count" do
+      messages = [
+        { role: "system", content: "System" },
+        { role: "user", content: "Hello" },
+        { role: "assistant", content: "Hi" }
+      ]
+
+      recent = agent.send(:get_recent_messages_with_tool_pairs, messages, 100)
+      expect(recent.size).to eq(3)
+    end
+  end
+
   describe "message compression" do
     let(:compression_config) do
       Clacky::AgentConfig.new(

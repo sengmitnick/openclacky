@@ -14,7 +14,7 @@ module Clacky
     def start
       @start_time = Time.now
       @running = true
-      print_status("#{@thinking_verb}… (ctrl+c to interrupt)")
+      print_status("#{@thinking_verb}… (ctrl+c to interrupt) ")
 
       # Start background thread to update elapsed time
       @update_thread = Thread.new do
@@ -29,7 +29,7 @@ module Clacky
       return unless @start_time
 
       elapsed = (Time.now - @start_time).to_i
-      print_status("#{@thinking_verb}… (ctrl+c to interrupt · #{elapsed}s)")
+      print_status("#{@thinking_verb}… (ctrl+c to interrupt · #{elapsed}s) ")
     end
 
     def finish

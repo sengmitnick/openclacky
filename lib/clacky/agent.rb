@@ -3,6 +3,7 @@
 require "securerandom"
 require "json"
 require "readline"
+require "set"
 require_relative "utils/arguments_parser"
 
 module Clacky
@@ -601,52 +602,80 @@ module Clacky
     end
 
     def get_recent_messages_with_tool_pairs(messages, count)
-      # Start from the end and work backwards
-      recent = []
-      i = messages.size - 1
+      # This method ensures that assistant messages with tool_calls are always kept together
+      # with ALL their corresponding tool_results, maintaining the correct order.
+      # This is critical for Bedrock Claude API which validates the tool_calls/tool_results pairing.
 
-      while i >= 0 && recent.size < count
+      return [] if messages.empty?
+
+      # Track which messages to include
+      messages_to_include = Set.new
+      
+      # Start from the end and work backwards
+      i = messages.size - 1
+      messages_collected = 0
+
+      while i >= 0 && messages_collected < count
         msg = messages[i]
 
-        # Skip if already added
-        if recent.include?(msg)
+        # Skip if already marked for inclusion
+        if messages_to_include.include?(i)
           i -= 1
           next
         end
 
-        recent.unshift(msg)
+        # Mark this message for inclusion
+        messages_to_include.add(i)
+        messages_collected += 1
 
-        # If this is a tool result message, make sure we include the corresponding assistant message with tool_calls
+        # If this is an assistant message with tool_calls, we MUST include ALL corresponding tool results
+        if msg[:role] == "assistant" && msg[:tool_calls]
+          tool_call_ids = msg[:tool_calls].map { |tc| tc[:id] }
+          
+          # Find all tool results that belong to this assistant message
+          # They should be in the messages immediately following this assistant message
+          j = i + 1
+          while j < messages.size
+            next_msg = messages[j]
+            
+            # If we find a tool result for one of our tool_calls, include it
+            if next_msg[:role] == "tool" && tool_call_ids.include?(next_msg[:tool_call_id])
+              messages_to_include.add(j)
+            elsif next_msg[:role] != "tool"
+              # Stop when we hit a non-tool message (start of next turn)
+              break
+            end
+            
+            j += 1
+          end
+        end
+
+        # If this is a tool result, make sure its assistant message is also included
         if msg[:role] == "tool"
-          # Find the previous assistant message with tool_calls
+          # Find the corresponding assistant message
           j = i - 1
           while j >= 0
             prev_msg = messages[j]
             if prev_msg[:role] == "assistant" && prev_msg[:tool_calls]
-              # Check if this assistant message has the tool_call that matches our tool result message
+              # Check if this assistant has the matching tool_call
               has_matching_call = prev_msg[:tool_calls].any? { |tc| tc[:id] == msg[:tool_call_id] }
-              if has_matching_call && !recent.include?(prev_msg)
-                # Insert at the beginning to maintain order
-                recent.unshift(prev_msg)
+              if has_matching_call
+                unless messages_to_include.include?(j)
+                  messages_to_include.add(j)
+                  messages_collected += 1
+                end
 
-                # CRITICAL: If this assistant message has multiple tool_calls,
-                # we MUST include ALL corresponding tool results.
-                # Otherwise Bedrock Claude will throw a validation error.
-                if prev_msg[:tool_calls].size > 1
-                  tool_call_ids = prev_msg[:tool_calls].map { |tc| tc[:id] }
-
-                  # Find all tool result messages that correspond to this assistant message's tool calls
-                  k = j + 1
-                  while k < messages.size
-                    result_msg = messages[k]
-                    if result_msg[:role] == "tool" &&
-                       tool_call_ids.include?(result_msg[:tool_call_id]) &&
-                       !recent.include?(result_msg)
-                      # Add this tool result to maintain the complete tool_use/tool_result pairing
-                      recent << result_msg
-                    end
-                    k += 1
+                # Also include all other tool results for this assistant message
+                tool_call_ids = prev_msg[:tool_calls].map { |tc| tc[:id] }
+                k = j + 1
+                while k < messages.size
+                  result_msg = messages[k]
+                  if result_msg[:role] == "tool" && tool_call_ids.include?(result_msg[:tool_call_id])
+                    messages_to_include.add(k)
+                  elsif result_msg[:role] != "tool"
+                    break
                   end
+                  k += 1
                 end
 
                 break
@@ -659,7 +688,8 @@ module Clacky
         i -= 1
       end
 
-      recent
+      # Extract the messages in their original order
+      messages_to_include.to_a.sort.map { |idx| messages[idx] }
     end
 
     def summarize_messages(messages)
