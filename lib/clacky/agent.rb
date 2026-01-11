@@ -89,6 +89,26 @@ module Clacky
       @working_dir = session_data[:working_dir]
       @created_at = session_data[:created_at]
       @total_tasks = session_data.dig(:stats, :total_tasks) || 0
+
+      # Check if the session ended with an error
+      last_status = session_data.dig(:stats, :last_status)
+      last_error = session_data.dig(:stats, :last_error)
+      
+      if last_status == "error" && last_error
+        # Find and remove the last user message that caused the error
+        # This allows the user to retry with a different prompt
+        last_user_index = @messages.rindex { |m| m[:role] == "user" }
+        if last_user_index
+          @messages = @messages[0...last_user_index]
+          
+          # Trigger a hook to notify about the rollback
+          trigger_hook(:session_rollback, {
+            reason: "Previous session ended with error",
+            error_message: last_error,
+            rolled_back_message_index: last_user_index
+          })
+        end
+      end
     end
 
     def add_hook(event, &block)
@@ -175,7 +195,9 @@ module Clacky
     end
 
     # Generate session data for saving
-    def to_session_data
+    # @param status [Symbol] Status of the last task: :success, :error, or :interrupted
+    # @param error_message [String] Error message if status is :error
+    def to_session_data(status: :success, error_message: nil)
       # Get first real user message for preview (skip compressed system messages)
       first_user_msg = @messages.find do |m|
         m[:role] == "user" && !m[:content].to_s.start_with?("[SYSTEM]")
@@ -194,6 +216,17 @@ module Clacky
         "No messages"
       end
 
+      stats_data = {
+        total_tasks: @total_tasks,
+        total_iterations: @iterations,
+        total_cost_usd: @total_cost.round(4),
+        duration_seconds: @start_time ? (Time.now - @start_time).round(2) : 0,
+        last_status: status.to_s
+      }
+      
+      # Add error message if status is error
+      stats_data[:last_error] = error_message if status == :error && error_message
+
       {
         session_id: @session_id,
         created_at: @created_at,
@@ -210,12 +243,7 @@ module Clacky
           max_tokens: @config.max_tokens,
           verbose: @config.verbose
         },
-        stats: {
-          total_tasks: @total_tasks,
-          total_iterations: @iterations,
-          total_cost_usd: @total_cost.round(4),
-          duration_seconds: @start_time ? (Time.now - @start_time).round(2) : 0
-        },
+        stats: stats_data,
         messages: @messages,
         first_user_message: first_message_preview
       }
@@ -500,7 +528,7 @@ module Clacky
       return unless @config.enable_compression
 
       # Only compress if we have more messages than threshold
-      threshold = @config.keep_recent_messages + 5 # +5 to avoid compressing too frequently
+      threshold = @config.keep_recent_messages + 20 # +20 to avoid compressing too frequently
       return if @messages.size <= threshold
 
       original_size = @messages.size

@@ -421,9 +421,9 @@ module Clacky
 
             total_cost += result[:total_cost_usd]
 
-            # Save session after each task
+            # Save session after each task with success status
             if session_manager
-              session_manager.save(agent.to_session_data)
+              session_manager.save(agent.to_session_data(status: :success))
             end
 
             # Show brief task completion
@@ -436,14 +436,14 @@ module Clacky
           rescue Clacky::AgentInterrupted
             # Save session on interruption
             if session_manager
-              session_manager.save(agent.to_session_data)
+              session_manager.save(agent.to_session_data(status: :interrupted))
               say "\n\n⚠️  Task interrupted by user (Ctrl+C)", :yellow
               say "You can start a new task or type 'exit' to quit.\n", :yellow
             end
           rescue StandardError => e
             # Save session on error
             if session_manager
-              session_manager.save(agent.to_session_data)
+              session_manager.save(agent.to_session_data(status: :error, error_message: e.message))
             end
 
             say "\n❌ Error: #{e.message}", :red
