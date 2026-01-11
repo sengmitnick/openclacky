@@ -176,14 +176,17 @@ module Clacky
 
     # Generate session data for saving
     def to_session_data
-      # Get first user message for preview
-      first_user_msg = @messages.find { |m| m[:role] == "user" }
+      # Get first real user message for preview (skip compressed system messages)
+      first_user_msg = @messages.find do |m|
+        m[:role] == "user" && !m[:content].to_s.start_with?("[SYSTEM]")
+      end
 
       # Extract preview text from first user message
       first_message_preview = if first_user_msg
         content = first_user_msg[:content]
         if content.is_a?(String)
-          content[0..100]
+          # Truncate to 100 characters for preview
+          content.length > 100 ? "#{content[0..100]}..." : content
         else
           "User message (non-string content)"
         end
@@ -576,6 +579,27 @@ module Clacky
               if has_matching_call && !recent.include?(prev_msg)
                 # Insert at the beginning to maintain order
                 recent.unshift(prev_msg)
+                
+                # CRITICAL: If this assistant message has multiple tool_calls,
+                # we MUST include ALL corresponding tool results.
+                # Otherwise Bedrock Claude will throw a validation error.
+                if prev_msg[:tool_calls].size > 1
+                  tool_call_ids = prev_msg[:tool_calls].map { |tc| tc[:id] }
+                  
+                  # Find all tool result messages that correspond to this assistant message's tool calls
+                  k = j + 1
+                  while k < messages.size
+                    result_msg = messages[k]
+                    if result_msg[:role] == "tool" && 
+                       tool_call_ids.include?(result_msg[:tool_call_id]) && 
+                       !recent.include?(result_msg)
+                      # Add this tool result to maintain the complete tool_use/tool_result pairing
+                      recent << result_msg
+                    end
+                    k += 1
+                  end
+                end
+                
                 break
               end
             end

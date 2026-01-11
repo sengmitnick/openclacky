@@ -91,8 +91,6 @@ module Clacky
         end
       end
 
-      private
-
       def enhance_result(result, original_command, safe_command)
         # If command was replaced, add security information
         if original_command != safe_command

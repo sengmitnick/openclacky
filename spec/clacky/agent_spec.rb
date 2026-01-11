@@ -166,5 +166,54 @@ RSpec.describe Clacky::Agent do
 
       expect(final_count).to eq(initial_count) # No compression
     end
+
+    it "preserves all tool results when assistant has multiple tool_calls" do
+      allow(client).to receive(:send_messages_with_tools)
+        .and_return(mock_api_response(content: "done"))
+
+      messages = compression_agent.instance_variable_get(:@messages)
+      messages << { role: "system", content: "System" }
+      
+      # Add many messages to trigger compression
+      10.times do |i|
+        messages << { role: "user", content: "Request #{i}" }
+        messages << { role: "assistant", content: "Response #{i}" }
+      end
+
+      # Add a critical scenario: assistant with MULTIPLE tool_calls
+      messages << { role: "user", content: "Do two things" }
+      messages << {
+        role: "assistant",
+        content: nil,
+        tool_calls: [
+          { id: "call_1", type: "function", function: { name: "tool_a", arguments: "{}" } },
+          { id: "call_2", type: "function", function: { name: "tool_b", arguments: "{}" } }
+        ]
+      }
+      # Add the two corresponding tool results
+      messages << { role: "tool", tool_call_id: "call_1", content: "Result A" }
+      messages << { role: "tool", tool_call_id: "call_2", content: "Result B" }
+      
+      # Add a final message to be preserved
+      messages << { role: "user", content: "Final request" }
+
+      compression_agent.send(:compress_messages_if_needed)
+      compressed = compression_agent.instance_variable_get(:@messages)
+
+      # Find the assistant message with multiple tool_calls
+      assistant_msg = compressed.find do |m|
+        m[:role] == "assistant" && m[:tool_calls]&.size == 2
+      end
+
+      if assistant_msg
+        # If the assistant message is preserved, ALL its tool results must be preserved
+        tool_call_ids = assistant_msg[:tool_calls].map { |tc| tc[:id] }
+        tool_results = compressed.select { |m| m[:role] == "tool" && tool_call_ids.include?(m[:tool_call_id]) }
+        
+        expect(tool_results.size).to eq(2), 
+          "Expected 2 tool results for assistant with 2 tool_calls, but found #{tool_results.size}"
+        expect(tool_results.map { |m| m[:tool_call_id] }.sort).to eq(["call_1", "call_2"].sort)
+      end
+    end
   end
 end

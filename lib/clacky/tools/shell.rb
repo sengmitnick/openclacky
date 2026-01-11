@@ -171,8 +171,6 @@ module Clacky
         end
       end
 
-      private
-
       def determine_timeouts(command, soft_timeout, hard_timeout)
         # 检查是否是慢命令
         is_slow = SLOW_COMMANDS.any? { |slow_cmd| command.include?(slow_cmd) }
