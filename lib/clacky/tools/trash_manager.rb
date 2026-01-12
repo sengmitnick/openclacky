@@ -260,7 +260,7 @@ module Clacky
           - Use 'list' to see what files are in trash
           - Use 'restore' to get back accidentally deleted files
           - Use 'empty' periodically to free up disk space
-          - All deletions by SafeShell are logged in .ai_safety.log
+          - All deletions by SafeShell are logged in ~/.clacky/safety_logs/
         HELP
 
         {

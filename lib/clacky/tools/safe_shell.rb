@@ -147,6 +147,12 @@ module Clacky
         trash_directory = Clacky::TrashDirectory.new(@project_root)
         @trash_dir = trash_directory.trash_dir
         @backup_dir = trash_directory.backup_dir
+        
+        # Setup safety log directory under ~/.clacky/safety_logs/
+        @project_hash = trash_directory.generate_project_hash(@project_root)
+        @safety_log_dir = File.join(Dir.home, ".clacky", "safety_logs", @project_hash)
+        FileUtils.mkdir_p(@safety_log_dir) unless Dir.exist?(@safety_log_dir)
+        @safety_log_file = File.join(@safety_log_dir, "safety.log")
       end
 
       def make_command_safe(command)
@@ -384,8 +390,7 @@ module Clacky
       end
 
       def write_log(log_entry)
-        log_file = File.join(@project_root, '.ai_safety.log')
-        File.open(log_file, 'a') do |f|
+        File.open(@safety_log_file, 'a') do |f|
           f.puts JSON.generate(log_entry)
         end
       rescue StandardError
