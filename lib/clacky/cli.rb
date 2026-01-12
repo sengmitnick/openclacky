@@ -4,6 +4,10 @@ require "thor"
 require "tty-prompt"
 require "tty-spinner"
 require "readline"
+require_relative "ui/banner"
+require_relative "ui/prompt"
+require_relative "ui/statusbar"
+require_relative "ui/formatter"
 
 module Clacky
   class CLI < Thor
@@ -140,7 +144,7 @@ module Clacky
         # Report the error
         say "\n❌ Error: #{e.message}", :red
         say e.backtrace.first(5).join("\n"), :red if options[:verbose]
-        
+
         # Show session saved message
         if session_manager&.last_saved_path
           say "\n📂 Session saved: #{session_manager.last_saved_path}", :yellow
@@ -149,7 +153,7 @@ module Clacky
         # Guide user to recover
         say "\n💡 To recover and retry, run:", :yellow
         say "   clacky agent -c", :cyan
-        
+
         exit 1
       ensure
         Dir.chdir(original_dir)
@@ -214,12 +218,14 @@ module Clacky
       end
 
       def display_agent_event(event)
+        formatter = ui_formatter
+
         case event[:type]
         when :thinking
-          print "💭 "
+          formatter.thinking
         when :assistant_message
           # Display assistant's thinking/explanation before tool calls
-          say "\n💬 #{event[:data][:content]}", :white if event[:data][:content] && !event[:data][:content].empty?
+          formatter.assistant_message(event[:data][:content])
         when :tool_call
           display_tool_call(event[:data])
         when :observation
@@ -227,15 +233,15 @@ module Clacky
           # Auto-display TODO status if exists
           display_todo_status_if_exists
         when :answer
-          say "\n⏺ #{event[:data][:content]}", :white if event[:data][:content] && !event[:data][:content].empty?
+          formatter.assistant_message(event[:data][:content])
         when :tool_denied
-          say "\n⏺ Tool denied: #{event[:data][:name]}\n\n", :yellow
+          formatter.tool_denied(event[:data][:name])
         when :tool_planned
-          say "\n⏺ Planned: #{event[:data][:name]}", :blue
+          formatter.tool_planned(event[:data][:name])
         when :tool_error
-          say "\n⏺ Error: #{event[:data][:error].message}", :red
+          formatter.tool_error(event[:data][:error].message)
         when :on_iteration
-          say "\n--- Iteration #{event[:data][:iteration]} ---", :yellow if options[:verbose]
+          formatter.iteration(event[:data][:iteration]) if options[:verbose]
         end
       end
 
@@ -249,14 +255,14 @@ module Clacky
           begin
             args = JSON.parse(args_json, symbolize_names: true)
             formatted = tool.format_call(args)
-            say "\n⏺ #{formatted}", :cyan
+            ui_formatter.tool_call(formatted)
           rescue JSON::ParserError, StandardError => e
             say "⚠️  Warning: Failed to format tool call: #{e.message}", :yellow
-            say "\n⏺ #{tool_name}(...)", :cyan
+            ui_formatter.tool_call("#{tool_name}(...)")
           end
         else
           say "⚠️  Warning: Tool instance not found for '#{tool_name}'", :yellow
-          say "\n⏺ #{tool_name}(...)", :cyan
+          ui_formatter.tool_call("#{tool_name}(...)")
         end
 
         # Show verbose details if requested
@@ -274,15 +280,15 @@ module Clacky
         if tool
           begin
             summary = tool.format_result(result)
-            say "  ⎿ #{summary}", :white
+            ui_formatter.tool_result(summary)
           rescue StandardError => e
-            say "  ⎿ Done", :white
+            ui_formatter.tool_result("Done")
           end
         else
           # Fallback for unknown tools
           result_str = result.to_s
           summary = result_str.length > 100 ? "#{result_str[0..100]}..." : result_str
-          say "  ⎿ #{summary}", :white
+          ui_formatter.tool_result(summary)
         end
 
         # Show verbose details if requested
@@ -313,31 +319,7 @@ module Clacky
         todos = @current_agent.todos
         return if todos.empty?
 
-        # Count statuses
-        completed = todos.count { |t| t[:status] == "completed" }
-        total = todos.size
-
-        # Build progress bar
-        progress_bar = todos.map { |t| t[:status] == "completed" ? "✓" : "○" }.join
-
-        # Check if all completed
-        if completed == total
-          say "\n📋 Tasks [#{completed}/#{total}]: #{progress_bar} 🎉 All completed!", :green
-          return
-        end
-
-        # Find current and next tasks
-        current_task = todos.find { |t| t[:status] == "pending" }
-        next_task_index = todos.index(current_task)
-        next_task = next_task_index && todos[next_task_index + 1]
-
-        say "\n📋 Tasks [#{completed}/#{total}]: #{progress_bar}", :yellow
-        if current_task
-          say "   → Next: ##{current_task[:id]} - #{current_task[:task]}", :white
-        end
-        if next_task && next_task[:status] == "pending"
-          say "   ⇢ After that: ##{next_task[:id]} - #{next_task[:task]}", :white
-        end
+        ui_formatter.todo_status(todos)
       end
 
       def display_agent_result(result)
@@ -387,26 +369,37 @@ module Clacky
         # Store agent as instance variable for access in display methods
         @current_agent = agent
 
+        # Initialize UI components
+        banner = ui_banner
+        prompt = ui_prompt
+        statusbar = ui_statusbar
+
+        # Show startup banner for new session
+        if agent.total_tasks == 0
+          banner.display_startup
+        end
+
         # Show session info if continuing
         if agent.total_tasks > 0
-          say "Continuing session: #{agent.session_id[0..7]}", :cyan
-          say "Created: #{Time.parse(agent.created_at).strftime('%Y-%m-%d %H:%M')}", :cyan
-          say "Tasks completed: #{agent.total_tasks}", :cyan
-          say "Total cost: $#{agent.total_cost.round(4)}", :cyan
-          say ""
+          banner.display_session_continue(
+            session_id: agent.session_id[0..7],
+            created_at: Time.parse(agent.created_at).strftime('%Y-%m-%d %H:%M'),
+            tasks: agent.total_tasks,
+            cost: agent.total_cost.round(4)
+          )
 
           # Show recent conversation history
           display_recent_messages(agent.messages, limit: 5)
+        else
+          # Show welcome info for new session
+          banner.display_agent_welcome(
+            working_dir: working_dir,
+            mode: agent_config.permission_mode,
+            max_iterations: agent_config.max_iterations,
+            max_cost: agent_config.max_cost_usd
+          )
         end
 
-        say "🤖 Starting interactive agent mode...", :green
-        say "Working directory: #{working_dir}", :cyan
-        say "Mode: #{agent_config.permission_mode}", :yellow
-        say "Max iterations: #{agent_config.max_iterations} per task", :yellow
-        say "Max cost: $#{agent_config.max_cost_usd} per task", :yellow
-        say "\nType 'exit' or 'quit' to end the session.\n", :yellow
-
-        prompt = TTY::Prompt.new
         total_tasks = agent.total_tasks
         total_cost = agent.total_cost
 
@@ -418,15 +411,26 @@ module Clacky
           unless current_message && !current_message.strip.empty?
             say "\n" if total_tasks > 0
 
-            # Use Readline for better Unicode/CJK support
-            current_message = Readline.readline("You: ", true)
+            # Show status bar before input
+            statusbar.display(
+              working_dir: working_dir,
+              mode: agent_config.permission_mode.to_s,
+              model: agent_config.model,
+              tasks: total_tasks,
+              cost: total_cost
+            )
+
+            # Use enhanced prompt with "You:" prefix
+            current_message = prompt.read_input(prefix: "You:")
 
             break if current_message.nil? || %w[exit quit].include?(current_message&.downcase&.strip)
             next if current_message.strip.empty?
+            
+            # Display user's message after input
+            ui_formatter.user_message(current_message)
           end
 
           total_tasks += 1
-          say "\n"
 
           begin
             result = agent.run(current_message) do |event|
@@ -441,17 +445,17 @@ module Clacky
             end
 
             # Show brief task completion
-            say "\n" + ("-" * 60), :cyan
-            say "✓ Task completed", :green
-            say "  Iterations: #{result[:iterations]}", :white
-            say "  Cost: $#{result[:total_cost_usd].round(4)}", :white
-            say "  Session total: #{total_tasks} tasks, $#{total_cost.round(4)}", :yellow
-            say "-" * 60, :cyan
+            banner.display_task_complete(
+              iterations: result[:iterations],
+              cost: result[:total_cost_usd].round(4),
+              total_tasks: total_tasks,
+              total_cost: total_cost.round(4)
+            )
           rescue Clacky::AgentInterrupted
             # Save session on interruption
             if session_manager
               session_manager.save(agent.to_session_data(status: :interrupted))
-              say "\n\n⚠️  Task interrupted by user (Ctrl+C)", :yellow
+              ui_formatter.warning("Task interrupted by user (Ctrl+C)")
               say "You can start a new task or type 'exit' to quit.\n", :yellow
             end
           rescue StandardError => e
@@ -461,17 +465,15 @@ module Clacky
             end
 
             # Report the error
-            say "\n❌ Error: #{e.message}", :red
-            say e.backtrace.first(3).join("\n"), :white if options[:verbose]
-            
+            banner.display_error(e.message, details: options[:verbose] ? e.backtrace.first(3).join("\n") : nil)
+
             # Show session saved message
             if session_manager&.last_saved_path
-              say "\n📂 Session saved: #{session_manager.last_saved_path}", :yellow
+              ui_formatter.info("Session saved: #{session_manager.last_saved_path}")
             end
 
             # Guide user to recover
-            say "\n💡 To recover and retry, run:", :yellow
-            say "   clacky agent -c", :cyan
+            ui_formatter.info("To recover and retry, run: clacky agent -c")
             say "\nOr you can continue with a new task or type 'exit' to quit.", :yellow
           end
 
@@ -484,9 +486,10 @@ module Clacky
           session_manager.save(agent.to_session_data)
         end
 
-        say "\n👋 Agent session ended", :green
-        say "Total tasks completed: #{total_tasks}", :cyan
-        say "Total cost: $#{total_cost.round(4)}", :cyan
+        banner.display_goodbye(
+          total_tasks: total_tasks,
+          total_cost: total_cost.round(4)
+        )
       end
 
       def list_sessions
@@ -582,21 +585,23 @@ module Clacky
           return
         end
 
-        say "📜 Recent conversation history:\n", :yellow
-        say "-" * 60, :white
+        formatter = ui_formatter
+        formatter.separator("─")
+        say pastel.dim("Recent conversation history:"), :yellow
+        formatter.separator("─")
 
         recent.each do |msg|
           case msg[:role]
           when "user"
             content = truncate_message(msg[:content], 150)
-            say "\n👤 You: #{content}", :cyan
+            say "  #{pastel.blue('[>>]')} You: #{content}"
           when "assistant"
             content = truncate_message(msg[:content], 200)
-            say "🤖 Assistant: #{content}", :green
+            say "  #{pastel.green('[<<]')} Assistant: #{content}"
           end
         end
 
-        say "\n" + ("-" * 60), :white
+        formatter.separator("─")
         say ""
       end
 
@@ -611,6 +616,27 @@ module Clacky
         else
           cleaned
         end
+      end
+
+      # UI component accessors
+      def ui_banner
+        @ui_banner ||= UI::Banner.new
+      end
+
+      def ui_prompt
+        @ui_prompt ||= UI::Prompt.new
+      end
+
+      def ui_statusbar
+        @ui_statusbar ||= UI::StatusBar.new
+      end
+
+      def ui_formatter
+        @ui_formatter ||= UI::Formatter.new
+      end
+
+      def pastel
+        @pastel ||= Pastel.new
       end
     end
 

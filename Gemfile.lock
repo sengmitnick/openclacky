@@ -4,8 +4,10 @@ PATH
     openclacky (0.5.1)
       diffy (~> 3.4)
       faraday (~> 2.0)
+      pastel (~> 0.8)
       thor (~> 1.3)
       tty-prompt (~> 0.23)
+      tty-screen (~> 0.8)
       tty-spinner (~> 0.9)
 
 GEM

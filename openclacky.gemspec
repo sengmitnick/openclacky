@@ -37,6 +37,8 @@ Gem::Specification.new do |spec|
   spec.add_dependency "tty-prompt", "~> 0.23"
   spec.add_dependency "tty-spinner", "~> 0.9"
   spec.add_dependency "diffy", "~> 3.4"
+  spec.add_dependency "pastel", "~> 0.8"
+  spec.add_dependency "tty-screen", "~> 0.8"
 
   # For more information and examples about making a new gem, check out our
   # guide at: https://bundler.io/guides/creating_gem.html

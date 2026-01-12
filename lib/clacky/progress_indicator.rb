@@ -14,6 +14,8 @@ module Clacky
     def start
       @start_time = Time.now
       @running = true
+      # Add a newline before the progress indicator to separate it from previous content
+      puts ""
       print_status("#{@thinking_verb}… (ctrl+c to interrupt) ")
 
       # Start background thread to update elapsed time
@@ -36,6 +38,8 @@ module Clacky
       @running = false
       @update_thread&.join
       clear_line
+      # Add a newline after finishing to separate from next output
+      puts ""
     end
 
     private
