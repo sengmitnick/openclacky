@@ -86,7 +86,7 @@ RSpec.describe Clacky::Tools::SafeShell do
     end
 
     it "truncates long commands" do
-      long_command = "a" * 100
+      long_command = "a" * 200
       formatted = tool.format_call({ command: long_command })
 
       expect(formatted.length).to be < long_command.length + 20

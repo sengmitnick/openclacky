@@ -117,8 +117,8 @@ module Clacky
         return "safe_shell(<no command>)" if cmd.empty?
 
         # Truncate long commands intelligently
-        if cmd.length > 50
-          "safe_shell(\"#{cmd[0..47]}...\")"
+        if cmd.length > 150
+          "safe_shell(\"#{cmd[0..147]}...\")"
         else
           "safe_shell(\"#{cmd}\")"
         end
