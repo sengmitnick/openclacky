@@ -5,9 +5,12 @@ require "pathname"
 module Clacky
   module Tools
     class Glob < Base
+      # Maximum file size to search (1MB)
+      MAX_FILE_SIZE = 1_048_576
+
       self.tool_name = "glob"
       self.tool_description = "Find files matching a glob pattern (e.g., '**/*.rb', 'src/**/*.js'). " \
-                              "Returns file paths sorted by modification time."
+                              "Returns file paths sorted by modification time. Respects .gitignore patterns."
       self.tool_category = "file_system"
       self.tool_parameters = {
         type: "object",
@@ -23,14 +26,14 @@ module Clacky
           },
           limit: {
             type: "integer",
-            description: "Maximum number of results to return (default: 100)",
-            default: 100
+            description: "Maximum number of results to return (default: 10)",
+            default: 10
           }
         },
         required: %w[pattern]
       }
 
-      def execute(pattern:, base_path: ".", limit: 100)
+      def execute(pattern:, base_path: ".", limit: 10)
         # Validate pattern
         if pattern.nil? || pattern.strip.empty?
           return { error: "Pattern cannot be empty" }
@@ -42,11 +45,49 @@ module Clacky
         end
 
         begin
+          # Expand base path
+          expanded_path = File.expand_path(base_path)
+
+          # Initialize gitignore parser
+          gitignore_path = Clacky::Utils::FileIgnoreHelper.find_gitignore(expanded_path)
+          gitignore = gitignore_path ? Clacky::GitignoreParser.new(gitignore_path) : nil
+
+          # Track skipped files
+          skipped = {
+            binary: 0,
+            too_large: 0,
+            ignored: 0
+          }
+
           # Change to base path and find matches
           full_pattern = File.join(base_path, pattern)
-          matches = Dir.glob(full_pattern, File::FNM_DOTMATCH)
-                       .reject { |path| File.directory?(path) }
-                       .reject { |path| path.end_with?(".", "..") }
+          all_matches = Dir.glob(full_pattern, File::FNM_DOTMATCH)
+                           .reject { |path| File.directory?(path) }
+                           .reject { |path| path.end_with?(".", "..") }
+
+          # Filter out ignored, binary, and too large files
+          matches = all_matches.select do |file|
+            # Skip if file should be ignored (unless it's a config file)
+            if Clacky::Utils::FileIgnoreHelper.should_ignore_file?(file, expanded_path, gitignore) && 
+               !Clacky::Utils::FileIgnoreHelper.is_config_file?(file)
+              skipped[:ignored] += 1
+              next false
+            end
+
+            # Skip binary files
+            if Clacky::Utils::FileIgnoreHelper.binary_file?(file)
+              skipped[:binary] += 1
+              next false
+            end
+
+            # Skip files that are too large
+            if File.size(file) > MAX_FILE_SIZE
+              skipped[:too_large] += 1
+              next false
+            end
+
+            true
+          end
 
           # Sort by modification time (most recent first)
           matches = matches.sort_by { |path| -File.mtime(path).to_i }
@@ -55,7 +96,7 @@ module Clacky
           total_matches = matches.length
           matches = matches.take(limit)
 
-          # Convert to relative or absolute paths
+          # Convert to absolute paths
           matches = matches.map { |path| File.expand_path(path) }
 
           {
@@ -63,6 +104,7 @@ module Clacky
             total_matches: total_matches,
             returned: matches.length,
             truncated: total_matches > limit,
+            skipped_files: skipped,
             error: nil
           }
         rescue StandardError => e
@@ -85,7 +127,21 @@ module Clacky
           count = result[:returned] || 0
           total = result[:total_matches] || 0
           truncated = result[:truncated] ? " (truncated)" : ""
-          "✓ Found #{count}/#{total} files#{truncated}"
+          
+          msg = "✓ Found #{count}/#{total} files#{truncated}"
+          
+          # Add skipped files info if present
+          if result[:skipped_files]
+            skipped = result[:skipped_files]
+            skipped_parts = []
+            skipped_parts << "#{skipped[:ignored]} ignored" if skipped[:ignored] > 0
+            skipped_parts << "#{skipped[:binary]} binary" if skipped[:binary] > 0
+            skipped_parts << "#{skipped[:too_large]} too large" if skipped[:too_large] > 0
+            
+            msg += " (skipped: #{skipped_parts.join(', ')})" unless skipped_parts.empty?
+          end
+          
+          msg
         end
       end
     end
