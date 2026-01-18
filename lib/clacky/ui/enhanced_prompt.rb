@@ -413,24 +413,6 @@ module Clacky
         # Hide terminal cursor (we render our own)
         print "\e[?25l"
 
-        # Clear previous display if exists
-        if @last_display_lines && @last_display_lines > 0
-          # Move up to the first line (N-1 times since we're on line N)
-          (@last_display_lines - 1).times do
-            print "\e[1A"  # Move up one line
-          end
-          # Now we're on the first line, clear all N lines
-          @last_display_lines.times do |i|
-            print "\r\e[2K"  # Move to beginning and clear entire line
-            print "\e[1B" if i < @last_display_lines - 1  # Move down (except last line)
-          end
-          # Move back to the first line
-          (@last_display_lines - 1).times do
-            print "\e[1A"
-          end
-          print "\r"  # Move to beginning of line
-        end
-
         lines_to_display = []
 
         # Get terminal width for full-width separator
@@ -488,9 +470,43 @@ module Clacky
         # Bottom separator line (full width)
         lines_to_display << @pastel.dim("─" * term_width)
 
-        # Output all lines
-        print lines_to_display.join("\n")
-        print "\n"  # Move cursor to next line so clearing logic works correctly
+        # Different rendering strategy for first display vs updates
+        if @last_display_lines && @last_display_lines > 0
+          # Update mode: move to start and overwrite (no flicker)
+          # Move up to the first line (N-1 times since we're on line N)
+          (@last_display_lines - 1).times do
+            print "\e[1A"  # Move up one line
+          end
+          print "\r"  # Move to beginning of line
+
+          # Output lines by overwriting
+          lines_to_display.each_with_index do |line, idx|
+            print "\r\e[K"  # Clear current line from cursor to end
+            print line
+            print "\n" if idx < lines_to_display.size - 1  # Newline except last line
+          end
+
+          # If new display has fewer lines than old, clear the extra lines
+          if lines_to_display.size < @last_display_lines - 1
+            extra_lines = @last_display_lines - 1 - lines_to_display.size
+            extra_lines.times do
+              print "\n\r\e[K"  # Move down and clear line
+            end
+            # Move back up to the last line of new display
+            extra_lines.times do
+              print "\e[1A"
+            end
+          end
+
+          print "\n"  # Move cursor to next line
+        else
+          # First display: use simple newline approach
+          print lines_to_display.join("\n")
+          print "\n"
+        end
+
+        # Flush output to ensure it's displayed immediately
+        $stdout.flush
 
         # Remember how many lines we displayed (including the newline)
         @last_display_lines = lines_to_display.size + 1
