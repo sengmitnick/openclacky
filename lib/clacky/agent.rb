@@ -73,6 +73,7 @@ module Clacky
       @total_tasks = 0
       @cost_source = :estimated  # Track whether cost is from API or estimated
       @task_cost_source = :estimated  # Track cost source for current task
+      @previous_total_tokens = 0  # Track tokens from previous iteration for delta calculation
 
       # Register built-in tools
       register_builtin_tools
@@ -131,6 +132,7 @@ module Clacky
     def run(user_input, images: [], &block)
       @start_time = Time.now
       @task_cost_source = :estimated  # Reset for new task
+      @previous_total_tokens = 0  # Reset token tracking for new task
 
       # Add system prompt as the first message if this is the first run
       if @messages.empty?
@@ -664,8 +666,9 @@ module Clacky
       cache_write = usage[:cache_creation_input_tokens] || 0
       cache_read = usage[:cache_read_input_tokens] || 0
 
-      # Calculate token delta from previous iteration (current iteration tokens only)
-      delta_tokens = total_tokens
+      # Calculate token delta from previous iteration
+      delta_tokens = total_tokens - @previous_total_tokens
+      @previous_total_tokens = total_tokens  # Update for next iteration
       
       # Build token summary string
       token_info = []
@@ -1123,9 +1126,20 @@ module Clacky
     end
 
     def build_success_result(call, result)
+      # Try to get tool instance to use its format_result_for_llm method
+      tool = @tool_registry.get(call[:name]) rescue nil
+      
+      formatted_result = if tool && tool.respond_to?(:format_result_for_llm)
+        # Tool provides a custom LLM-friendly format
+        tool.format_result_for_llm(result)
+      else
+        # Fallback: use the original result
+        result
+      end
+      
       {
         id: call[:id],
-        content: JSON.generate(result)
+        content: JSON.generate(formatted_result)
       }
     end
 

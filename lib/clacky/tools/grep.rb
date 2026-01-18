@@ -256,6 +256,50 @@ module Clacky
         end
       end
 
+      # Format result for LLM consumption - return a compact version to save tokens
+      def format_result_for_llm(result)
+        # If there's an error, return it as-is
+        return result if result[:error]
+
+        # Build a compact summary with file list and sample matches
+        compact = {
+          summary: {
+            total_matches: result[:total_matches],
+            files_with_matches: result[:files_with_matches],
+            files_searched: result[:files_searched],
+            truncated: result[:truncated],
+            truncation_reason: result[:truncation_reason]
+          }
+        }
+
+        # Include list of files with match counts
+        if result[:results] && !result[:results].empty?
+          compact[:files] = result[:results].map do |file_result|
+            {
+              file: file_result[:file],
+              match_count: file_result[:matches].length
+            }
+          end
+
+          # Include sample matches (first 2 matches from first 3 files) for context
+          sample_results = result[:results].take(3)
+          compact[:sample_matches] = sample_results.map do |file_result|
+            {
+              file: file_result[:file],
+              matches: file_result[:matches].take(2).map do |match|
+                {
+                  line_number: match[:line_number],
+                  line: match[:line]
+                  # Omit context to save space - it's rarely needed by LLM
+                }
+              end
+            }
+          end
+        end
+
+        compact
+      end
+
       private
 
       # Find .gitignore file in the search path or parent directories
