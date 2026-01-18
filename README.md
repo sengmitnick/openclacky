@@ -1,6 +1,6 @@
 # OpenClacky
 
-A command-line interface for interacting with AI models. OpenClacky supports OpenAI-compatible APIs, making it easy to chat with various AI models directly from your terminal.
+OpenClacky = Lovable + Supabase
 
 ## Features
 

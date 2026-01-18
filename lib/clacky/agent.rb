@@ -4,6 +4,7 @@ require "securerandom"
 require "json"
 require "tty-prompt"
 require "set"
+require "base64"
 require_relative "utils/arguments_parser"
 
 module Clacky
@@ -127,7 +128,7 @@ module Clacky
       @hooks.add(event, &block)
     end
 
-    def run(user_input, &block)
+    def run(user_input, images: [], &block)
       @start_time = Time.now
       @task_cost_source = :estimated  # Reset for new task
 
@@ -144,7 +145,9 @@ module Clacky
         @messages << system_message
       end
 
-      @messages << { role: "user", content: user_input }
+      # Format user message with images if provided
+      user_content = format_user_content(user_input, images)
+      @messages << { role: "user", content: user_content }
       @total_tasks += 1
 
       emit_event(:on_start, { input: user_input }, &block)
@@ -661,8 +664,33 @@ module Clacky
       cache_write = usage[:cache_creation_input_tokens] || 0
       cache_read = usage[:cache_read_input_tokens] || 0
 
+      # Calculate token delta from previous iteration (current iteration tokens only)
+      delta_tokens = total_tokens
+      
       # Build token summary string
       token_info = []
+
+      # Delta tokens with color coding at the beginning
+      require 'pastel'
+      pastel = Pastel.new
+      
+      delta_str = "+#{delta_tokens}"
+      colored_delta = if delta_tokens > 10000
+        pastel.red.bold(delta_str)  # Error level: red for > 10k
+      elsif delta_tokens > 5000
+        pastel.yellow.bold(delta_str)  # Warn level: yellow for > 5k
+      else
+        pastel.green(delta_str)  # Normal: green for <= 5k
+      end
+      
+      token_info << colored_delta
+
+      # Cache status indicator
+      cache_used = cache_read > 0 || cache_write > 0
+      if cache_used
+        cache_indicator = "✓ Cached"
+        token_info << pastel.cyan(cache_indicator)
+      end
 
       # Input tokens (with cache breakdown if available)
       if cache_write > 0 || cache_read > 0
@@ -684,8 +712,6 @@ module Clacky
       end
 
       # Display with color
-      require 'pastel'
-      pastel = Pastel.new
       puts pastel.dim("    [Tokens] #{token_info.join(' | ')}")
     end
 
@@ -1174,6 +1200,77 @@ module Clacky
       @tool_registry.register(Tools::WebFetch.new)
       @tool_registry.register(Tools::TodoManager.new)
       @tool_registry.register(Tools::RunProject.new)
+    end
+
+    # Format user content with optional images
+    # @param text [String] User's text input
+    # @param images [Array<String>] Array of image file paths
+    # @return [String|Array] String if no images, Array with text and image_url objects if images present
+    def format_user_content(text, images)
+      return text if images.nil? || images.empty?
+
+      content = []
+      content << { type: "text", text: text } unless text.nil? || text.empty?
+
+      images.each do |image_path|
+        image_url = image_path_to_data_url(image_path)
+        content << { type: "image_url", image_url: { url: image_url } }
+      end
+
+      content
+    end
+
+    # Convert image file path to base64 data URL
+    # @param path [String] File path to image
+    # @return [String] base64 data URL (e.g., "data:image/png;base64,...")
+    def image_path_to_data_url(path)
+      unless File.exist?(path)
+        raise ArgumentError, "Image file not found: #{path}"
+      end
+
+      # Read file as binary
+      image_data = File.binread(path)
+
+      # Detect MIME type from file extension or content
+      mime_type = detect_image_mime_type(path, image_data)
+
+      # Encode to base64
+      base64_data = Base64.strict_encode64(image_data)
+
+      "data:#{mime_type};base64,#{base64_data}"
+    end
+
+    # Detect image MIME type
+    # @param path [String] File path
+    # @param data [String] Binary image data
+    # @return [String] MIME type (e.g., "image/png")
+    def detect_image_mime_type(path, data)
+      # Try to detect from file extension first
+      ext = File.extname(path).downcase
+      case ext
+      when ".png"
+        "image/png"
+      when ".jpg", ".jpeg"
+        "image/jpeg"
+      when ".gif"
+        "image/gif"
+      when ".webp"
+        "image/webp"
+      else
+        # Try to detect from file signature (magic bytes)
+        if data.start_with?("\x89PNG".b)
+          "image/png"
+        elsif data.start_with?("\xFF\xD8\xFF".b)
+          "image/jpeg"
+        elsif data.start_with?("GIF87a".b) || data.start_with?("GIF89a".b)
+          "image/gif"
+        elsif data.start_with?("RIFF".b) && data[8..11] == "WEBP".b
+          "image/webp"
+        else
+          # Default to png if unknown
+          "image/png"
+        end
+      end
     end
   end
 end

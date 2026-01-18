@@ -371,6 +371,7 @@ module Clacky
 
         # Process initial message if provided
         current_message = initial_message
+        current_images = []
 
         loop do
           # Get message from user if not provided
@@ -397,6 +398,7 @@ module Clacky
             # - nil on EOF
             if result.nil?
               current_message = nil
+              current_images = []
               break
             elsif result[:command]
               # Handle commands
@@ -409,27 +411,38 @@ module Clacky
                 total_cost = 0.0
                 ui_formatter.info("Session cleared. Starting fresh.")
                 current_message = nil
+                current_images = []
                 next
               when :exit
                 current_message = nil
+                current_images = []
                 break
               end
             else
-              # Normal input with text
+              # Normal input with text and optional images
               current_message = result[:text]
+              current_images = result[:images] || []
             end
 
             break if current_message.nil? || %w[exit quit].include?(current_message&.downcase&.strip)
-            next if current_message.strip.empty?
+            next if current_message.strip.empty? && current_images.empty?
 
             # Display user's message after input
             ui_formatter.user_message(current_message)
+            
+            # Display image info if images were pasted
+            if current_images.any?
+              current_images.each_with_index do |img_path, idx|
+                filename = File.basename(img_path)
+                say "  📎 Image #{idx + 1}: #{filename}", :cyan
+              end
+            end
           end
 
           total_tasks += 1
 
           begin
-            result = agent.run(current_message) do |event|
+            result = agent.run(current_message, images: current_images) do |event|
               display_agent_event(event)
             end
 
@@ -475,8 +488,9 @@ module Clacky
             say "\nOr you can continue with a new task or type 'exit' to quit.", :yellow
           end
 
-          # Clear current_message to prompt for next input
+          # Clear current_message and current_images to prompt for next input
           current_message = nil
+          current_images = []
         end
 
         # Save final session state only if there were actual tasks
