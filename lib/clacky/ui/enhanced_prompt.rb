@@ -160,8 +160,44 @@ module Clacky
           when "\u0016" # Ctrl+V - Paste
             pasted = paste_from_clipboard
             if pasted[:type] == :image
-              # Save image and add to list
-              @images << pasted[:path]
+              # Save image and add to list (max 3 images)
+              if @images.size < 3
+                @images << pasted[:path]
+              else
+                # Show warning below input box
+                print "\n"
+                @formatter.warning("Maximum 3 images allowed. Delete an image first (Ctrl+D).")
+
+                # Wait a moment for user to see the message
+                sleep(1.5)
+
+                # Clear the warning lines
+                print "\r\e[2K"  # Clear current line
+                print "\e[1A"    # Move up one line
+                print "\r\e[2K"  # Clear the warning line
+
+                # Now clear the entire input box using the saved line count
+                if @last_display_lines && @last_display_lines > 0
+                  # We're now at the position where the input box ends
+                  # Move up to the first line of input box
+                  (@last_display_lines - 1).times do
+                    print "\e[1A"
+                  end
+                  # Clear all lines
+                  @last_display_lines.times do |i|
+                    print "\r\e[2K"
+                    print "\e[1B" if i < @last_display_lines - 1
+                  end
+                  # Move back to the first line
+                  (@last_display_lines - 1).times do
+                    print "\e[1A"
+                  end
+                  print "\r"
+                end
+
+                # Reset display state so next display will redraw
+                @last_display_lines = 0
+              end
             else
               # Handle pasted text
               pasted_text = pasted[:text]
@@ -275,10 +311,79 @@ module Clacky
 
           when "\u0004" # Ctrl+D - Delete image by number
             if @images.any?
-              print "\nEnter image number to delete (1-#{@images.size}): "
-              num = STDIN.gets.to_i
-              if num > 0 && num <= @images.size
-                @images.delete_at(num - 1)
+              # If only one image, delete it directly
+              if @images.size == 1
+                @images.clear
+
+                # Clear the entire input box
+                if @last_display_lines && @last_display_lines > 0
+                  # Move up to the first line of input box
+                  (@last_display_lines - 1).times do
+                    print "\e[1A"
+                  end
+                  # Clear all lines
+                  @last_display_lines.times do |i|
+                    print "\r\e[2K"
+                    print "\e[1B" if i < @last_display_lines - 1
+                  end
+                  # Move back to the first line
+                  (@last_display_lines - 1).times do
+                    print "\e[1A"
+                  end
+                  print "\r"
+                end
+
+                # Reset so next display starts fresh
+                @last_display_lines = 0
+              else
+                # Multiple images - ask which one to delete
+                # Move cursor to after the input box to show prompt
+                print "\n"
+                print "Delete image (1-#{@images.size}): "
+                $stdout.flush
+
+                # Read single character without waiting for Enter
+                deleted = false
+                $stdin.raw do |io|
+                  char = io.getc
+                  num = char.to_i
+
+                  # Delete if valid number
+                  if num > 0 && num <= @images.size
+                    @images.delete_at(num - 1)
+                    print "#{num} ✓"
+                    deleted = true
+                  else
+                    print "✗"
+                  end
+                end
+
+                # Clear the prompt lines
+                print "\r\e[2K"  # Clear current line
+                print "\e[1A"    # Move up one line
+                print "\r\e[2K"  # Clear the prompt line
+
+                # Now clear the entire input box using the saved line count
+                if @last_display_lines && @last_display_lines > 0
+                  # We're now at the position where the input box ends
+                  # Move up to the first line of input box
+                  (@last_display_lines - 1).times do
+                    print "\e[1A"
+                  end
+                  # Clear all lines
+                  @last_display_lines.times do |i|
+                    print "\r\e[2K"
+                    print "\e[1B" if i < @last_display_lines - 1
+                  end
+                  # Move back to the first line
+                  (@last_display_lines - 1).times do
+                    print "\e[1A"
+                  end
+                  print "\r"
+                end
+
+                # Reset so next display starts fresh
+                @last_display_lines = 0
               end
             end
 
@@ -305,11 +410,23 @@ module Clacky
 
       # Display simplified prompt (just prefix and input, no box)
       def display_simple_prompt(lines, prefix, line_index, cursor_pos)
+        # Hide terminal cursor (we render our own)
+        print "\e[?25l"
+
         # Clear previous display if exists
         if @last_display_lines && @last_display_lines > 0
-          @last_display_lines.times do
+          # Move up to the first line (N-1 times since we're on line N)
+          (@last_display_lines - 1).times do
             print "\e[1A"  # Move up one line
-            print "\e[2K"  # Clear entire line
+          end
+          # Now we're on the first line, clear all N lines
+          @last_display_lines.times do |i|
+            print "\r\e[2K"  # Move to beginning and clear entire line
+            print "\e[1B" if i < @last_display_lines - 1  # Move down (except last line)
+          end
+          # Move back to the first line
+          (@last_display_lines - 1).times do
+            print "\e[1A"
           end
           print "\r"  # Move to beginning of line
         end
@@ -327,7 +444,8 @@ module Clacky
           @images.each_with_index do |img_path, idx|
             filename = File.basename(img_path)
             filesize = File.exist?(img_path) ? format_filesize(File.size(img_path)) : "N/A"
-            lines_to_display << @pastel.dim("[Image #{idx + 1}] #{filename} (#{filesize})")
+            line = @pastel.dim("[Image #{idx + 1}] #{filename} (#{filesize}) (Ctrl+D to delete)")
+            lines_to_display << line
           end
           lines_to_display << ""
         end
@@ -373,21 +491,32 @@ module Clacky
 
         # Output all lines
         print lines_to_display.join("\n")
-        print "\n"
-        
-        # Remember how many lines we displayed
-        @last_display_lines = lines_to_display.size
+        print "\n"  # Move cursor to next line so clearing logic works correctly
+
+        # Remember how many lines we displayed (including the newline)
+        @last_display_lines = lines_to_display.size + 1
       end
 
       # Clear simple prompt display
       def clear_simple_prompt(num_lines)
         if @last_display_lines && @last_display_lines > 0
-          @last_display_lines.times do
+          # Move up to the first line (N-1 times since we're on line N)
+          (@last_display_lines - 1).times do
             print "\e[1A"  # Move up one line
-            print "\e[2K"  # Clear entire line
+          end
+          # Now we're on the first line, clear all N lines
+          @last_display_lines.times do |i|
+            print "\r\e[2K"  # Move to beginning and clear entire line
+            print "\e[1B" if i < @last_display_lines - 1  # Move down (except last line)
+          end
+          # Move back to the first line
+          (@last_display_lines - 1).times do
+            print "\e[1A"
           end
           print "\r"  # Move to beginning of line
         end
+        # Show terminal cursor again
+        print "\e[?25h"
       end
 
       # Expand placeholders to actual pasted content
