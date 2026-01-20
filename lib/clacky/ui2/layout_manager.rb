@@ -6,17 +6,18 @@ module Clacky
   module UI2
     # LayoutManager manages screen layout with split areas (output area on top, input area on bottom)
     class LayoutManager
-      attr_reader :screen, :output_area, :input_area, :separator_row
+      attr_reader :screen, :output_area, :input_area, :todo_area, :separator_row
 
       # Layout constants
       SEPARATOR_HEIGHT = 1
       INPUT_HEIGHT = 2  # Prompt line + extra space
       STATUS_HEIGHT = 1 # Status bar height
 
-      def initialize(output_area:, input_area:)
+      def initialize(output_area:, input_area:, todo_area: nil)
         @screen = ScreenBuffer.new
         @output_area = output_area
         @input_area = input_area
+        @todo_area = todo_area
         @render_mutex = Mutex.new
 
         calculate_layout
@@ -25,9 +26,11 @@ module Clacky
 
       # Calculate layout dimensions based on screen size
       def calculate_layout
-        @output_height = screen.height - INPUT_HEIGHT - SEPARATOR_HEIGHT - STATUS_HEIGHT
+        todo_height = @todo_area&.height || 0
+        @output_height = screen.height - INPUT_HEIGHT - SEPARATOR_HEIGHT - STATUS_HEIGHT - todo_height
         @separator_row = @output_height
-        @input_row = @separator_row + SEPARATOR_HEIGHT
+        @todo_row = @separator_row + SEPARATOR_HEIGHT
+        @input_row = @todo_row + todo_height
         @status_row = screen.height - STATUS_HEIGHT
 
         # Update component dimensions
@@ -41,6 +44,7 @@ module Clacky
         @render_mutex.synchronize do
           output_area.render(start_row: 0)
           render_separator_internal
+          render_todo_internal
           input_area.render(start_row: @input_row)
           screen.show_cursor  # Show cursor in input area
         end
@@ -87,6 +91,33 @@ module Clacky
           print formatted
 
           # Restore cursor to input area
+          restore_cursor_to_input_internal
+          screen.flush
+        end
+      end
+
+      # Update todos and re-render
+      # @param todos [Array<Hash>] Array of todo items
+      def update_todos(todos)
+        return unless @todo_area
+
+        @render_mutex.synchronize do
+          old_height = @todo_area.height
+          @todo_area.update(todos)
+          new_height = @todo_area.height
+
+          # Recalculate layout if height changed
+          if old_height != new_height
+            calculate_layout
+            # Clear and re-render everything
+            screen.clear_screen
+          end
+
+          # Render all areas
+          output_area.render(start_row: 0)
+          render_separator_internal
+          render_todo_internal
+          input_area.render(start_row: @input_row)
           restore_cursor_to_input_internal
           screen.flush
         end
@@ -171,6 +202,13 @@ module Clacky
         print separator
 
         screen.flush
+      end
+
+      # Internal todo rendering (without mutex)
+      def render_todo_internal
+        return unless @todo_area&.visible?
+
+        @todo_area.render(start_row: @todo_row)
       end
 
       # Internal cursor restore (without mutex)

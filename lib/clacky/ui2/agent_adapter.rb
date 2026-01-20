@@ -159,6 +159,10 @@ module Clacky
           @ui_controller.append_output(
             "[DEBUG] #{event[:data][:message]}"
           )
+
+        when :todos_updated
+          # Update todos display
+          @ui_controller.update_todos(event[:data][:todos])
         end
       end
 

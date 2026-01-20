@@ -541,6 +541,11 @@ module Clacky
           # Hook: after_tool_use
           @hooks.trigger(:after_tool_use, call, result)
 
+          # Emit todos update event after todo_manager execution
+          if call[:name] == "todo_manager"
+            emit_event(:todos_updated, { todos: @todos.dup }, &block)
+          end
+
           emit_event(:observation, { tool: call[:name], result: result }, &block)
           results << build_success_result(call, result)
         rescue StandardError => e

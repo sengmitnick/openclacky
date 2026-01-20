@@ -5,6 +5,7 @@ require_relative "layout_manager"
 require_relative "view_renderer"
 require_relative "components/output_area"
 require_relative "components/input_area"
+require_relative "components/todo_area"
 
 module Clacky
   module UI2
@@ -15,18 +16,20 @@ module Clacky
       def initialize
         @event_bus = EventBus.new
         @renderer = ViewRenderer.new
-        
+
         # Initialize layout components
         @output_area = Components::OutputArea.new(height: 20) # Will be recalculated
         @input_area = Components::InputArea.new(height: 2, row: 22)
+        @todo_area = Components::TodoArea.new
         @layout = LayoutManager.new(
           output_area: @output_area,
-          input_area: @input_area
+          input_area: @input_area,
+          todo_area: @todo_area
         )
-        
+
         @running = false
         @input_callback = nil
-        
+
         setup_default_event_listeners
       end
 
@@ -72,6 +75,12 @@ module Clacky
       # @param text [String] Status text
       def update_status(text)
         @layout.render_status(text)
+      end
+
+      # Update todos display
+      # @param todos [Array<Hash>] Array of todo items
+      def update_todos(todos)
+        @layout.update_todos(todos)
       end
 
       private
