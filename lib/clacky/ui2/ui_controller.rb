@@ -29,6 +29,7 @@ module Clacky
 
         @running = false
         @input_callback = nil
+        @agent_thread = nil
 
         setup_default_event_listeners
       end
@@ -149,6 +150,13 @@ module Clacky
         when :exit
           stop
           exit(0)
+        when :interrupt
+          # Kill agent thread if running
+          if @agent_thread&.alive?
+            @agent_thread.raise(Interrupt, "User interrupted")
+            @agent_thread = nil
+          end
+          @event_bus.publish(:interrupt_requested, {})
         when :clear_output
           @output_area.clear
           @layout.render_all
@@ -172,10 +180,14 @@ module Clacky
 
         # Call callback in background thread
         if @input_callback
-          Thread.new do
+          @agent_thread = Thread.new do
             @input_callback.call(data[:text], data[:images])
+          rescue Interrupt
+            # Silently handle interrupt - message already shown by AgentAdapter
           rescue => e
             @layout.append_output("Error: #{e.message}")
+          ensure
+            @agent_thread = nil
           end
         end
       end

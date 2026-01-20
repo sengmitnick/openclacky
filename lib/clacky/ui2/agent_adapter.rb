@@ -21,6 +21,23 @@ module Clacky
         @progress_running = false
         @progress_thread = nil
         @progress_start_time = nil
+        # Agent running state
+        @agent_running = false
+
+        setup_interrupt_handler
+      end
+
+      # Setup handler for interrupt events from UI
+      private def setup_interrupt_handler
+        @event_bus.on(:interrupt_requested) do
+          if agent_running?
+            interrupt_agent!
+          else
+            # No agent running, exit the application
+            @ui_controller.stop
+            exit(0)
+          end
+        end
       end
 
       # Connect an agent to this adapter
@@ -34,10 +51,31 @@ module Clacky
       # @param images [Array<String>] Optional image paths
       # @return [Hash] Agent result
       def run_agent(message, images: [])
+        @agent_running = true
         result = @agent.run(message, images: images) do |event|
           handle_agent_event(event)
         end
         result
+      ensure
+        @agent_running = false
+      end
+
+      # Check if agent is currently running
+      def agent_running?
+        @agent_running
+      end
+
+      # Interrupt the running agent
+      def interrupt_agent!
+        # Always stop progress indicator, even if agent is not running
+        stop_progress_indicator
+
+        # Always show interrupt message to user
+        @ui_controller.append_output("[Interrupted by user]")
+
+        if @agent_running && @agent
+          @agent.interrupt!
+        end
       end
 
       # Handle agent events and publish to UI2

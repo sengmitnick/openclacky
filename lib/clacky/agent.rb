@@ -76,6 +76,7 @@ module Clacky
       @task_cost_source = :estimated  # Track cost source for current task
       @previous_total_tokens = 0  # Track tokens from previous iteration for delta calculation
       @tool_confirmation_handler = nil  # Optional callback for UI2 integration
+      @interrupted = false  # Flag for user interrupt
 
       # Register built-in tools
       register_builtin_tools
@@ -595,7 +596,23 @@ module Clacky
       end
     end
 
+    # Interrupt the agent's current run
+    # Called when user presses Ctrl+C during agent execution
+    def interrupt!
+      @interrupted = true
+    end
+
+    # Check if agent is currently running
+    def running?
+      @start_time != nil && !should_stop?
+    end
+
     def should_stop?
+      if @interrupted
+        @interrupted = false  # Reset for next run
+        return true
+      end
+
       if @iterations >= @config.max_iterations
         puts "\n⚠️  Reached maximum iterations (#{@config.max_iterations})" if @config.verbose
         return true
