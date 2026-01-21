@@ -18,6 +18,8 @@ module Clacky
           @default_value = default
           @active = false
           @result_queue = nil
+          @paste_counter = 0
+          @paste_placeholders = {}
         end
 
         # Activate inline input and wait for user input
@@ -41,6 +43,24 @@ module Clacky
           return { action: nil } unless @active
 
           case key
+          when Hash
+            if key[:type] == :rapid_input
+              # Handle multi-line paste with placeholder
+              pasted_text = key[:text]
+              pasted_lines = pasted_text.split(/\r\n|\r|\n/)
+
+              if pasted_lines.size > 1
+                # Multi-line paste - use placeholder
+                @paste_counter += 1
+                placeholder = "[##{@paste_counter} Paste Text]"
+                @paste_placeholders[placeholder] = pasted_text
+                insert_text(placeholder)
+              else
+                # Single line - insert directly
+                insert_text(pasted_text)
+              end
+            end
+            { action: :update }
           when :enter
             handle_enter
           when :backspace
@@ -105,7 +125,7 @@ module Clacky
         private
 
         def handle_enter
-          result = current_line
+          result = expand_placeholders(current_line)
           # If empty and has default, use default
           result = @default_value.to_s if result.empty? && @default_value
 
@@ -114,6 +134,10 @@ module Clacky
           queue&.push(result)
 
           { action: :submit, result: result }
+        end
+
+        def expand_placeholders(text)
+          super(text, @paste_placeholders)
         end
 
         def handle_cancel

@@ -92,6 +92,12 @@ module Clacky
           old_height = required_height
 
           result = case key
+          when Hash
+            if key[:type] == :rapid_input
+              insert_text(key[:text])
+              clear_tips
+            end
+            { action: nil }
           when :enter then handle_enter
           when :newline then newline; { action: nil }
           when :backspace then backspace; { action: nil }
@@ -231,7 +237,7 @@ module Clacky
         end
 
         def current_content
-          text = @lines.join("\n")
+          text = expand_placeholders(@lines.join("\n"))
           return "" if text.empty?
 
           # Format user input with color and spacing from theme
@@ -615,11 +621,7 @@ module Clacky
         end
 
         def expand_placeholders(text)
-          result = text.dup
-          @paste_placeholders.each do |placeholder, actual_content|
-            result.gsub!(placeholder, actual_content)
-          end
-          result
+          super(text, @paste_placeholders)
         end
 
         def render_line_with_cursor(line)

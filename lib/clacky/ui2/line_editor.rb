@@ -121,6 +121,17 @@ module Clacky
         @cursor_position += text.length
       end
 
+      # Expand placeholders and normalize line endings
+      def expand_placeholders(text, placeholders)
+        result = text.dup
+        placeholders.each do |placeholder, actual_content|
+          # Normalize line endings to \n
+          normalized_content = actual_content.gsub(/\r\n|\r/, "\n")
+          result.gsub!(placeholder, normalized_content)
+        end
+        result
+      end
+
       # Render line with cursor highlight
       # @return [String] Rendered line with cursor
       def render_line_with_cursor

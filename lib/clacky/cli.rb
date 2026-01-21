@@ -302,9 +302,7 @@ module Clacky
         # Inject UI into agent
         agent.instance_variable_set(:@ui, ui_controller)
 
-        # Track session state
-        total_tasks = agent.total_tasks
-        total_cost = agent.total_cost
+        # Track agent thread state
         agent_thread = nil
 
         # Set up interrupt handler
@@ -327,9 +325,9 @@ module Clacky
           when "/clear"
             # Clear session by creating a new agent
             agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller)
-            total_tasks = 0
-            total_cost = 0.0
             ui_controller.show_info("Session cleared. Starting fresh.")
+            # Update session bar with reset values
+            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
             next
           when "/exit", "/quit"
             ui_controller.stop
@@ -342,19 +340,17 @@ module Clacky
           # Run agent in background thread
           agent_thread = Thread.new do
             begin
-              total_tasks += 1
-
               # Run agent (Agent will call @ui methods directly)
+              # Agent internally tracks total_tasks and total_cost
               result = agent.run(input, images: images)
-              total_cost += result[:total_cost_usd]
 
               # Save session after each task
               if session_manager
                 session_manager.save(agent.to_session_data(status: :success))
               end
 
-              # Update session bar with new task count and cost
-              ui_controller.update_sessionbar(tasks: total_tasks, cost: total_cost)
+              # Update session bar with agent's cumulative stats
+              ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
             rescue Clacky::AgentInterrupted
               # Save session on interruption
               if session_manager
@@ -383,11 +379,13 @@ module Clacky
 
           begin
             result = agent.run(initial_message, images: [])
-            total_cost += result[:total_cost_usd]
 
             if session_manager
               session_manager.save(agent.to_session_data(status: :success))
             end
+
+            # Update session bar with agent's cumulative stats
+            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
           rescue StandardError => e
             ui_controller.show_error("Error: #{e.message}")
           end
@@ -397,14 +395,14 @@ module Clacky
         ui_controller.start
 
         # Save final session state
-        if session_manager && total_tasks > 0
+        if session_manager && agent.total_tasks > 0
           session_manager.save(agent.to_session_data)
         end
 
         # Show goodbye message
         say "\n👋 Goodbye! Session stats:", :green
-        say "   Tasks completed: #{total_tasks}", :cyan
-        say "   Total cost: $#{total_cost.round(4)}", :cyan
+        say "   Tasks completed: #{agent.total_tasks}", :cyan
+        say "   Total cost: $#{agent.total_cost.round(4)}", :cyan
       end
 
     end

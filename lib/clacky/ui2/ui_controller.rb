@@ -420,7 +420,7 @@ module Clacky
       end
 
       # Handle keyboard input - delegate to InputArea or InlineInput
-      # @param key [Symbol, String] Key input
+      # @param key [Symbol, String, Hash] Key input or rapid input hash
       def handle_key(key)
         # If InlineInput is active, delegate to it
         if @inline_input&.active?

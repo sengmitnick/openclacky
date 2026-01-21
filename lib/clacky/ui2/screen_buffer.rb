@@ -13,6 +13,8 @@ module Clacky
         @width = TTY::Screen.width
         @height = TTY::Screen.height
         @buffer = []
+        @last_input_time = nil
+        @rapid_input_threshold = 0.01 # 10ms threshold for detecting paste-like rapid input
         setup_resize_handler
       end
 
@@ -98,10 +100,19 @@ module Clacky
 
       # Read a key including special keys (arrows, etc.)
       # @param timeout [Float] Timeout in seconds
-      # @return [Symbol, String, nil] Key symbol or character
+      # @return [Symbol, String, Hash, nil] Key symbol, character, or { type: :rapid_input, text: String }
       def read_key(timeout: nil)
+        $stdin.set_encoding('UTF-8')
+
+        current_time = Time.now.to_f
+        is_rapid_input = @last_input_time && (current_time - @last_input_time) < @rapid_input_threshold
+        @last_input_time = current_time
+
         char = read_char(timeout: timeout)
         return nil unless char
+
+        # Ensure character is UTF-8 encoded
+        char = char.force_encoding('UTF-8') if char.is_a?(String) && char.encoding != Encoding::UTF_8
 
         # Handle escape sequences for special keys
         if char == "\e"
@@ -123,6 +134,36 @@ module Clacky
               return :delete if char4 == "~"
             end
           end
+        end
+
+        # Check if there are more characters available (for rapid input detection)
+        has_more_input = IO.select([$stdin], nil, nil, 0)
+
+        # If this is rapid input or there are more characters available
+        if is_rapid_input || has_more_input
+          buffer = char.to_s.dup
+          buffer.force_encoding('UTF-8')
+
+          # Keep reading available characters
+          loop do
+            break unless IO.select([$stdin], nil, nil, 0)
+
+            next_char = $stdin.getc
+            break unless next_char
+
+            next_char = next_char.force_encoding('UTF-8') if next_char.encoding != Encoding::UTF_8
+            buffer << next_char
+          end
+
+          # If we buffered multiple characters or newlines, treat as rapid input (paste)
+          if buffer.length > 1 || buffer.include?("\n") || buffer.include?("\r")
+            # Remove any trailing \r or \n from rapid input buffer
+            cleaned_buffer = buffer.gsub(/[\r\n]+\z/, '')
+            return { type: :rapid_input, text: cleaned_buffer } if cleaned_buffer.length > 0
+          end
+
+          # Single character, continue to normal handling
+          char = buffer[0] if buffer.length == 1
         end
 
         # Handle control characters
