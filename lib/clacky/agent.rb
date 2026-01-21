@@ -532,7 +532,7 @@ module Clacky
             @ui&.update_todos(@todos.dup)
           end
 
-          @ui&.show_tool_result(result)
+          @ui&.show_tool_result(tool.format_result(result))
           results << build_success_result(call, result)
         rescue StandardError => e
           @hooks.trigger(:on_tool_error, call, e)

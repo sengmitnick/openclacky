@@ -159,10 +159,9 @@ module Clacky
       end
 
       # Show tool result
-      # @param result [String, Hash] Tool result
+      # @param result [String] Formatted tool result
       def show_tool_result(result)
-        result_str = result.is_a?(Hash) ? JSON.pretty_generate(result) : result.to_s
-        output = @renderer.render_tool_result(result: result_str)
+        output = @renderer.render_tool_result(result: result)
         append_output(output)
       end
 
