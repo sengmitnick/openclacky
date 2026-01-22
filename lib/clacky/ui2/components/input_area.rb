@@ -361,6 +361,7 @@ module Clacky
         def handle_enter
           text = current_value.strip
 
+          # Handle commands (with or without slash)
           if text.start_with?('/')
             case text
             when '/clear'
@@ -372,6 +373,8 @@ module Clacky
               set_tips("Unknown command: #{text} (Available: /clear, /exit)", type: :warning)
               return { action: nil }
             end
+          elsif text == 'exit' || text == 'quit'
+            return { action: :exit }
           end
 
           if text.empty? && @images.empty?
