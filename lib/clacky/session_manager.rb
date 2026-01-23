@@ -20,6 +20,10 @@ module Clacky
       FileUtils.chmod(0o600, filepath)
 
       @last_saved_path = filepath
+
+      # Keep only the most recent 10 sessions
+      cleanup_by_count(keep: 10)
+
       filepath
     end
 
@@ -104,9 +108,9 @@ module Clacky
     end
 
     def generate_filename(session_id, created_at)
-      date = Time.parse(created_at).strftime("%Y-%m-%d")
+      datetime = Time.parse(created_at).strftime("%Y-%m-%d-%H-%M-%S")
       short_id = session_id[0..7]
-      "#{date}_#{short_id}.json"
+      "#{datetime}-#{short_id}.json"
     end
 
     def all_sessions
