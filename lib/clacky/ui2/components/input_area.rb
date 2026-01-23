@@ -444,25 +444,7 @@ module Clacky
         end
 
         def handle_ctrl_c
-          has_content = @lines.any? { |line| !line.strip.empty? } || @images.any?
-
-          if has_content
-            current_time = Time.now.to_f
-            time_since_last = @last_ctrl_c_time ? (current_time - @last_ctrl_c_time) : Float::INFINITY
-
-            if time_since_last < 2.0
-              # Second Ctrl+C within 2 seconds - request interrupt/exit
-              { action: :interrupt }
-            else
-              # First Ctrl+C - clear content
-              @last_ctrl_c_time = current_time
-              clear
-              { action: nil }
-            end
-          else
-            # Input is empty - request interrupt/exit
-            { action: :interrupt }
-          end
+          { action: :interrupt }
         end
 
         def handle_ctrl_d

@@ -13,7 +13,7 @@ module Clacky
   module UI2
     # UIController is the MVC controller layer that coordinates UI state and user interactions
     class UIController
-      attr_reader :layout, :renderer, :running, :inline_input
+      attr_reader :layout, :renderer, :running, :inline_input, :input_area
       attr_accessor :config
 
       def initialize(config = {})
@@ -559,7 +559,6 @@ module Clacky
 
           # Check if input area has content
           input_was_empty = @input_area.empty?
-          @input_area.clear unless input_was_empty
 
           # Notify CLI to handle interrupt (stop agent or exit)
           @interrupt_callback&.call(input_was_empty: input_was_empty)

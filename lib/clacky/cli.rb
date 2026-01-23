@@ -131,9 +131,9 @@ module Clacky
     desc "price", "Show pricing information for AI models"
     def price
       say "\n💰 Model Pricing Information\n\n", :green
-      
+
       say "Clacky supports three pricing modes when calculating API costs:\n\n", :white
-      
+
       say "  1. ", :cyan
       say "API-provided cost", :bold
       say " (", :white
@@ -141,7 +141,7 @@ module Clacky
       say ")", :white
       say "\n     The most accurate - uses actual cost data from the API response", :white
       say "\n     Supported by: OpenRouter, LiteLLM, and other compatible proxies\n\n"
-      
+
       say "  2. ", :cyan
       say "Model-specific pricing", :bold
       say " (", :white
@@ -149,7 +149,7 @@ module Clacky
       say ")", :white
       say "\n     Uses official pricing from model providers (Claude models)", :white
       say "\n     Includes tiered pricing and prompt caching discounts\n\n"
-      
+
       say "  3. ", :cyan
       say "Default fallback pricing", :bold
       say " (", :white
@@ -157,9 +157,9 @@ module Clacky
       say ")", :white
       say "\n     Conservative estimates for unknown models", :white
       say "\n     Input: $0.50/MTok, Output: $1.50/MTok\n\n"
-      
+
       say "Priority order: API cost > Model pricing > Default pricing\n\n", :yellow
-      
+
       say "Supported models with official pricing:\n", :green
       say "  • claude-opus-4.5\n", :cyan
       say "  • claude-sonnet-4.5\n", :cyan
@@ -167,7 +167,7 @@ module Clacky
       say "  • claude-3-5-sonnet-20241022\n", :cyan
       say "  • claude-3-5-sonnet-20240620\n", :cyan
       say "  • claude-3-5-haiku-20241022\n\n", :cyan
-      
+
       say "For detailed pricing information, visit:\n", :white
       say "https://www.anthropic.com/pricing\n\n", :blue
     end
@@ -287,7 +287,6 @@ module Clacky
         Clacky::Agent.from_session(client, agent_config, session_data)
       end
 
-
       # Run agent with UI2 split-screen interface
       def run_agent_with_ui2(agent, working_dir, agent_config, initial_message = nil, session_manager = nil, client = nil)
         # Create UI2 controller with configuration
@@ -307,15 +306,16 @@ module Clacky
 
         # Set up interrupt handler
         ui_controller.on_interrupt do |input_was_empty:|
-          if agent_thread&.alive?
-            # Agent is running - interrupt it
-            agent_thread.raise(Clacky::AgentInterrupted, "User interrupted")
-          elsif input_was_empty
-            # No agent running and input was empty - exit
+          if (not agent_thread&.alive?) && input_was_empty
             ui_controller.stop
-            exit(0)
+            exit(1)
           end
-          # Otherwise just cleared input, do nothing more
+
+          if agent_thread&.alive?
+            agent_thread.raise(Clacky::AgentInterrupted, "User interrupted")
+          end
+          ui_controller.input_area.clear
+          ui_controller.input_area.set_tips("Press Ctrl+C again to exit.", type: :info)
         end
 
         # Set up input handler
@@ -362,7 +362,7 @@ module Clacky
               if session_manager
                 session_manager.save(agent.to_session_data(status: :interrupted))
               end
-              ui_controller.show_warning("Task interrupted (Ctrl+C)")
+              ui_controller.show_warning("Task interrupted by user")
             rescue StandardError => e
               # Save session on error
               if session_manager
