@@ -45,7 +45,7 @@ module Clacky
     # Send messages with function calling (tools) support
     # Options:
     #   - enable_caching: Enable prompt caching for system prompt and tools (default: false)
-    def send_messages_with_tools(messages, model:, tools:, max_tokens:, verbose: false, enable_caching: false)
+    def send_messages_with_tools(messages, model:, tools:, max_tokens:, enable_caching: false)
       # Apply caching to messages if enabled
       caching_supported = supports_prompt_caching?(model)
       caching_enabled = enable_caching && caching_supported
@@ -68,10 +68,6 @@ module Clacky
         if cache_index > 0
           # Add cache_control to this message
           processed_messages[cache_index][:cache_control] = { type: "ephemeral" }
-          
-          if verbose || ENV["CLACKY_DEBUG"]
-            puts "  Cache Control Added: Message at index #{cache_index} (role: #{processed_messages[cache_index][:role]})"
-          end
         end
       end
       
@@ -86,44 +82,16 @@ module Clacky
       if tools&.any?
         caching_supported = supports_prompt_caching?(model)
         caching_enabled = enable_caching && caching_supported
-        
-        # Debug logging for caching decisions
-        if verbose || ENV["CLACKY_DEBUG"]
-          puts "\n[DEBUG] Prompt Caching Analysis:"
-          puts "  Model: #{model}"
-          puts "  Caching Requested: #{enable_caching}"
-          puts "  Caching Supported: #{caching_supported}"
-          puts "  Caching Enabled: #{caching_enabled}"
-        end
-        
+
         if caching_enabled
           # Deep clone tools to avoid modifying original
           cached_tools = tools.map { |tool| deep_clone(tool) }
           # Mark the last tool for caching (Claude caches from cache breakpoint to end)
           cached_tools.last[:cache_control] = { type: "ephemeral" }
           body[:tools] = cached_tools
-          
-          if verbose || ENV["CLACKY_DEBUG"]
-            puts "  Cache Control Added: Last tool marked for caching"
-          end
         else
           body[:tools] = tools
         end
-      end
-
-      # Debug output
-      if verbose || ENV["CLACKY_DEBUG"]
-        puts "\n[DEBUG] Current directory: #{Dir.pwd}"
-        puts "[DEBUG] Request to API:"
-
-        # Create a simplified version of the body for display
-        display_body = body.dup
-        if display_body[:tools]&.any?
-          tool_names = display_body[:tools].map { |t| t.dig(:function, :name) }.compact
-          display_body[:tools] = "use tools: #{tool_names.join(', ')}"
-        end
-
-        puts JSON.pretty_generate(display_body)
       end
 
       response = connection.post("chat/completions") do |req|

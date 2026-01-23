@@ -168,7 +168,7 @@ module Clacky
 
           # Debug: check for potential infinite loops
           if @config.verbose
-            puts "[DEBUG] Iteration #{@iterations}: finish_reason=#{response[:finish_reason]}, tool_calls=#{response[:tool_calls]&.size || 'nil'}"
+            @ui&.log("Iteration #{@iterations}: finish_reason=#{response[:finish_reason]}, tool_calls=#{response[:tool_calls]&.size || 'nil'}", level: :debug)
           end
 
           # Check if done (no more tool calls needed)
@@ -389,7 +389,6 @@ module Clacky
           model: @config.model,
           tools: tools_to_send,
           max_tokens: @config.max_tokens,
-          verbose: @config.verbose,
           enable_caching: @config.enable_prompt_caching
         )
       rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
@@ -602,18 +601,18 @@ module Clacky
       end
 
       if @iterations >= @config.max_iterations
-        puts "\n⚠️  Reached maximum iterations (#{@config.max_iterations})" if @config.verbose
+        @ui&.log("Reached maximum iterations (#{@config.max_iterations})", level: :warning) if @config.verbose
         return true
       end
 
       if @total_cost >= @config.max_cost_usd
-        puts "\n⚠️  Reached maximum cost ($#{@config.max_cost_usd})" if @config.verbose
+        @ui&.log("Reached maximum cost ($#{@config.max_cost_usd})", level: :warning) if @config.verbose
         return true
       end
 
       # Check timeout only if configured (nil means no timeout)
       if @config.timeout_seconds && Time.now - @start_time > @config.timeout_seconds
-        puts "\n⚠️  Reached timeout (#{@config.timeout_seconds}s)" if @config.verbose
+        @ui&.log("Reached timeout (#{@config.timeout_seconds}s)", level: :warning) if @config.verbose
         return true
       end
 
@@ -628,7 +627,7 @@ module Clacky
         @cost_source = :api
         @task_cost_source = :api
         iteration_cost = usage[:api_cost]
-        puts "[DEBUG] Using API-provided cost: $#{usage[:api_cost]}" if @config.verbose
+        @ui&.log("Using API-provided cost: $#{usage[:api_cost]}", level: :debug) if @config.verbose
       else
         # Priority 2: Calculate from tokens using ModelPricing
         result = ModelPricing.calculate_cost(model: @config.model, usage: usage)
@@ -643,8 +642,8 @@ module Clacky
 
         if @config.verbose
           source_label = pricing_source == :price ? "model pricing" : "default pricing"
-          puts "[DEBUG] Calculated cost for #{@config.model} using #{source_label}: $#{cost.round(6)}"
-          puts "[DEBUG] Usage breakdown: prompt=#{usage[:prompt_tokens]}, completion=#{usage[:completion_tokens]}, cache_write=#{usage[:cache_creation_input_tokens] || 0}, cache_read=#{usage[:cache_read_input_tokens] || 0}"
+          @ui&.log("Calculated cost for #{@config.model} using #{source_label}: $#{cost.round(6)}", level: :debug)
+          @ui&.log("Usage breakdown: prompt=#{usage[:prompt_tokens]}, completion=#{usage[:completion_tokens]}, cache_write=#{usage[:cache_creation_input_tokens] || 0}, cache_read=#{usage[:cache_read_input_tokens] || 0}", level: :debug)
         end
       end
 
