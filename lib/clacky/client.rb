@@ -52,24 +52,10 @@ module Clacky
       
       # Deep clone messages to avoid modifying the original array
       processed_messages = messages.map { |msg| deep_clone(msg) }
-      
-      # Add cache control to the second-to-last message (not the very last one, which is the new user input)
-      # This caches all conversation history up to (but not including) the current turn
-      if caching_enabled && processed_messages.size >= 3
-        # Find the last non-system message before the final message
-        # Skip system messages and the last message (which is the new user input)
-        cache_index = processed_messages.size - 2
-        
-        # Make sure we're not caching a system message
-        while cache_index > 0 && processed_messages[cache_index][:role] == "system"
-          cache_index -= 1
-        end
-        
-        if cache_index > 0
-          # Add cache_control to this message
-          processed_messages[cache_index][:cache_control] = { type: "ephemeral" }
-        end
-      end
+
+      # Note: cache_control should be set by Agent on system prompt
+      # Client doesn't add additional cache_control to avoid overriding
+      # the system prompt cache breakpoint
       
       body = {
         model: model,

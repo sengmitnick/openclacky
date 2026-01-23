@@ -19,13 +19,9 @@ module Clacky
             type: "string",
             description: "Shell command to execute"
           },
-          soft_timeout: {
+          timeout: {
             type: "integer",
-            description: "Soft timeout in seconds (for interaction detection)"
-          },
-          hard_timeout: {
-            type: "integer",
-            description: "Hard timeout in seconds (force kill)"
+            description: "Command timeout in seconds (auto-detected if not specified: 60s for normal commands, 180s for build/install commands)"
           },
           max_output_lines: {
             type: "integer",
@@ -36,19 +32,29 @@ module Clacky
         required: ["command"]
       }
 
-      def execute(command:, soft_timeout: nil, hard_timeout: nil, max_output_lines: 1000)
+      def execute(command:, timeout: nil, max_output_lines: 1000)
         # Get project root directory
         project_root = Dir.pwd
 
         begin
-          # 1. Use safety replacer to process command
+          # 1. Extract timeout from command if it starts with "timeout N"
+          command, extracted_timeout = extract_timeout_from_command(command)
+          
+          # Use extracted timeout if not explicitly provided
+          timeout ||= extracted_timeout
+
+          # 2. Use safety replacer to process command
           safety_replacer = CommandSafetyReplacer.new(project_root)
           safe_command = safety_replacer.make_command_safe(command)
 
-          # 2. Call parent class execution method
+          # 3. Calculate timeouts: soft_timeout is fixed at 5s, hard_timeout from timeout parameter
+          soft_timeout = 5
+          hard_timeout = calculate_hard_timeout(command, timeout)
+
+          # 4. Call parent class execution method
           result = super(command: safe_command, soft_timeout: soft_timeout, hard_timeout: hard_timeout, max_output_lines: max_output_lines)
 
-          # 3. Enhance result information
+          # 5. Enhance result information
           enhance_result(result, command, safe_command)
 
         rescue SecurityError => e
@@ -62,6 +68,30 @@ module Clacky
             security_blocked: true
           }
         end
+      end
+
+      private def extract_timeout_from_command(command)
+        # Match patterns: "timeout 30 ...", "timeout 30s ...", etc.
+        # Supports: timeout N command, timeout Ns command, timeout -s SIGNAL N command
+        match = command.match(/^timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
+        
+        if match
+          timeout_value = match[1].to_i
+          actual_command = match[2]
+          return [actual_command, timeout_value]
+        end
+        
+        # No timeout prefix found, return original command
+        [command, nil]
+      end
+
+      private def calculate_hard_timeout(command, timeout)
+        # If timeout is provided, use it directly
+        return timeout if timeout
+
+        # Otherwise, auto-detect based on command type
+        is_slow = SLOW_COMMANDS.any? { |slow_cmd| command.include?(slow_cmd) }
+        is_slow ? 180 : 60
       end
 
       # Safe read-only commands that don't modify system state

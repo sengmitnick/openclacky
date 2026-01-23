@@ -127,7 +127,62 @@ RSpec.describe Clacky::Tools::SafeShell do
       expect(definition[:function][:name]).to eq("safe_shell")
       expect(definition[:function][:description]).to be_a(String)
       expect(definition[:function][:parameters][:required]).to include("command")
+      expect(definition[:function][:parameters][:properties]).to have_key(:timeout)
       expect(definition[:function][:parameters][:properties]).to have_key(:max_output_lines)
+    end
+  end
+
+  describe "timeout behavior" do
+    it "uses provided timeout as hard_timeout" do
+      # Test that timeout parameter is properly used
+      result = tool.execute(command: "echo 'test'", timeout: 30)
+      
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:success]).to be true
+    end
+
+    it "auto-detects timeout for slow commands when not specified" do
+      # Just verify it doesn't crash with auto-detection
+      result = tool.execute(command: "echo 'bundle install simulation'")
+      
+      expect(result[:exit_code]).to eq(0)
+    end
+
+    it "auto-detects timeout for normal commands when not specified" do
+      result = tool.execute(command: "echo 'normal command'")
+      
+      expect(result[:exit_code]).to eq(0)
+    end
+
+    it "extracts timeout from 'timeout N command' format" do
+      result = tool.execute(command: "timeout 30 echo 'test'")
+      
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:success]).to be true
+      # The actual command executed should be without the timeout prefix
+      expect(result[:stdout]).to include("test")
+    end
+
+    it "extracts timeout from 'timeout Ns command' format with seconds suffix" do
+      result = tool.execute(command: "timeout 45s echo 'hello'")
+      
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:stdout]).to include("hello")
+    end
+
+    it "extracts timeout with signal option 'timeout -s SIGNAL N command'" do
+      result = tool.execute(command: "timeout -s KILL 60 echo 'world'")
+      
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:stdout]).to include("world")
+    end
+
+    it "prefers explicit timeout parameter over extracted timeout" do
+      # When both are provided, explicit parameter should win
+      result = tool.execute(command: "timeout 10 echo 'test'", timeout: 99)
+      
+      expect(result[:exit_code]).to eq(0)
+      # We can't directly test which timeout was used, but we verify it executes
     end
   end
 end

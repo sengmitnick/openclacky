@@ -38,26 +38,25 @@ module Clacky
         -a, --attach N  - Attach to session by number (e.g., -a 2) or session ID prefix (e.g., -a b6682a87)
 
       Examples:
-        $ clacky agent
-        $ clacky agent "Create a README file"
         $ clacky agent --mode=auto_approve --path /path/to/project
-        $ clacky agent --tools file_reader glob grep
-        $ clacky agent -c
-        $ clacky agent -l
-        $ clacky agent -a 2
-        $ clacky agent -a b6682a87
     LONGDESC
     option :mode, type: :string, default: "confirm_safes",
            desc: "Permission mode: auto_approve, confirm_safes, confirm_edits, plan_only"
     option :tools, type: :array, default: ["all"], desc: "Allowed tools"
     option :max_iterations, type: :numeric, desc: "Maximum iterations (default: 50)"
     option :max_cost, type: :numeric, desc: "Maximum cost in USD (default: 5.0)"
-    option :verbose, type: :boolean, default: false, desc: "Show detailed output"
+    option :verbose, type: :boolean, aliases: "-v", default: false, desc: "Show detailed output"
     option :path, type: :string, desc: "Project directory path (defaults to current directory)"
     option :continue, type: :boolean, aliases: "-c", desc: "Continue most recent session"
     option :list, type: :boolean, aliases: "-l", desc: "List recent sessions"
     option :attach, type: :string, aliases: "-a", desc: "Attach to session by number or keyword"
+    option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
     def agent(message = nil)
+      # Handle help option
+      if options[:help]
+        invoke :help, ["agent"]
+        return
+      end
       config = Clacky::Config.load
 
       unless config.api_key
@@ -384,6 +383,9 @@ module Clacky
           end
         end
 
+        # Initialize UI screen first
+        ui_controller.initialize_and_show_banner
+
         # If there's an initial message, process it
         if initial_message && !initial_message.strip.empty?
           ui_controller.show_user_message(initial_message)
@@ -402,8 +404,8 @@ module Clacky
           end
         end
 
-        # Start UI controller (blocks until exit)
-        ui_controller.start
+        # Start input loop (blocks until exit)
+        ui_controller.start_input_loop
 
         # Save final session state
         if session_manager && agent.total_tasks > 0

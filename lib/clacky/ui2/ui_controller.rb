@@ -56,6 +56,12 @@ module Clacky
 
       # Start the UI controller
       def start
+        initialize_and_show_banner
+        start_input_loop
+      end
+
+      # Initialize screen and show banner (separate from input loop)
+      def initialize_and_show_banner
         @running = true
 
         # Set session bar data before initializing screen
@@ -71,8 +77,11 @@ module Clacky
 
         # Display welcome banner
         display_welcome_banner
+      end
 
-        # Start input loop in main thread
+      # Start input loop (separate from initialization)
+      def start_input_loop
+        @running = true
         input_loop
       end
 
