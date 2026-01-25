@@ -61,27 +61,6 @@ RSpec.describe Clacky::UI2::ViewRenderer do
     end
   end
 
-  describe "#render_status" do
-    it "renders status with iteration and cost" do
-      result = renderer.render_status(iteration: 5, cost: 0.1234)
-      expect(result).to include("Iter")
-      expect(result).to include("5")
-      expect(result).to include("Cost")
-      expect(result).to include("0.1234")
-    end
-
-    it "renders status with tasks progress" do
-      result = renderer.render_status(tasks_completed: 3, tasks_total: 10)
-      expect(result).to include("Tasks")
-      expect(result).to include("3/10")
-    end
-
-    it "renders custom message" do
-      result = renderer.render_status(message: "Processing...")
-      expect(result).to include("Processing...")
-    end
-  end
-
   describe "#render_thinking" do
     it "renders thinking indicator" do
       result = renderer.render_thinking
@@ -114,21 +93,4 @@ RSpec.describe Clacky::UI2::ViewRenderer do
     end
   end
 
-  describe "#render" do
-    it "delegates to message component" do
-      result = renderer.render(:message, { role: "user", content: "Test" })
-      expect(result).to include("Test")
-    end
-
-    it "delegates to tool component" do
-      result = renderer.render(:tool, { type: :call, tool_name: "test", formatted_call: "test()" })
-      expect(result).to include("test")
-    end
-
-    it "raises error for unknown component type" do
-      expect {
-        renderer.render(:unknown, {})
-      }.to raise_error(ArgumentError, /Unknown component type/)
-    end
-  end
 end

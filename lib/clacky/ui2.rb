@@ -14,7 +14,7 @@ require_relative "ui2/components/output_area"
 require_relative "ui2/components/input_area"
 require_relative "ui2/components/message_component"
 require_relative "ui2/components/tool_component"
-require_relative "ui2/components/status_component"
+require_relative "ui2/components/common_component"
 require_relative "ui2/components/welcome_banner"
 
 module Clacky

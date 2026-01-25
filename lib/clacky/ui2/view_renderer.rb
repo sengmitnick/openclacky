@@ -2,7 +2,7 @@
 
 require_relative "components/message_component"
 require_relative "components/tool_component"
-require_relative "components/status_component"
+require_relative "components/common_component"
 
 module Clacky
   module UI2
@@ -11,7 +11,7 @@ module Clacky
       def initialize
         @message_component = Components::MessageComponent.new
         @tool_component = Components::ToolComponent.new
-        @status_component = Components::StatusComponent.new
+        @common_component = Components::CommonComponent.new
       end
 
       # Render a user message
@@ -102,73 +102,55 @@ module Clacky
         )
       end
 
-      # Render status information
-      # @param iteration [Integer, nil] Current iteration
-      # @param cost [Float, nil] Total cost
-      # @param tasks_completed [Integer, nil] Completed tasks
-      # @param tasks_total [Integer, nil] Total tasks
-      # @param message [String, nil] Custom message
-      # @return [String] Rendered status
-      def render_status(iteration: nil, cost: nil, tasks_completed: nil, tasks_total: nil, message: nil)
-        @status_component.render(
-          iteration: iteration,
-          cost: cost,
-          tasks_completed: tasks_completed,
-          tasks_total: tasks_total,
-          message: message
-        )
-      end
-
       # Render thinking indicator
       # @return [String] Thinking indicator
       def render_thinking
-        @status_component.render_thinking
+        @common_component.render_thinking
       end
 
       # Render progress message
       # @param message [String] Progress message
       # @return [String] Progress indicator
       def render_progress(message)
-        @status_component.render_progress(message)
+        @common_component.render_progress(message)
       end
 
       # Render success message
       # @param message [String] Success message
       # @return [String] Success message
       def render_success(message)
-        @status_component.render_success(message)
+        @common_component.render_success(message)
       end
 
       # Render error message
       # @param message [String] Error message
       # @return [String] Error message
       def render_error(message)
-        @status_component.render_error(message)
+        @common_component.render_error(message)
       end
 
       # Render warning message
       # @param message [String] Warning message
       # @return [String] Warning message
       def render_warning(message)
-        @status_component.render_warning(message)
+        @common_component.render_warning(message)
       end
 
-      # Generic render method for any component type
-      # @param component_type [Symbol] Component type (:message, :tool, :status)
-      # @param data [Hash] Data to render
-      # @return [String] Rendered output
-      def render(component_type, data)
-        case component_type
-        when :message
-          @message_component.render(data)
-        when :tool
-          @tool_component.render(data)
-        when :status
-          @status_component.render(data)
-        else
-          raise ArgumentError, "Unknown component type: #{component_type}"
-        end
+      # Render task completion summary
+      # @param iterations [Integer] Number of iterations
+      # @param cost [Float] Cost in USD
+      # @param duration [Float] Duration in seconds
+      # @param cache_tokens [Integer] Cache read tokens
+      # @return [String] Formatted completion summary
+      def render_task_complete(iterations:, cost:, duration: nil, cache_tokens: nil)
+        @common_component.render_task_complete(
+          iterations: iterations,
+          cost: cost,
+          duration: duration,
+          cache_tokens: cache_tokens
+        )
       end
+
     end
   end
 end

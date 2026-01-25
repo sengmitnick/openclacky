@@ -209,7 +209,12 @@ module Clacky
         end
 
         result = build_result(:success)
-        @ui&.show_complete(iterations: result[:iterations], cost: result[:total_cost_usd])
+        @ui&.show_complete(
+          iterations: result[:iterations],
+          cost: result[:total_cost_usd],
+          duration: result[:duration_seconds],
+          cache_stats: result[:cache_stats]
+        )
         @hooks.trigger(:on_complete, result)
         result
       rescue Clacky::AgentInterrupted

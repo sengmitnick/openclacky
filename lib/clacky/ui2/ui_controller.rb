@@ -336,20 +336,25 @@ module Clacky
         append_output(output)
       end
 
-      # Show completion status
+      # Show completion status (only for tasks with more than 5 iterations)
       # @param iterations [Integer] Number of iterations
       # @param cost [Float] Cost of this run
-      # @param total_cost [Float, nil] Total accumulated cost (optional)
-      def show_complete(iterations:, cost:, total_cost: nil)
+      # @param duration [Float] Duration in seconds
+      # @param cache_stats [Hash] Cache statistics
+      def show_complete(iterations:, cost:, duration: nil, cache_stats: nil)
         # Update status back to 'idle' when task is complete
         update_sessionbar(status: 'idle')
-        
-        message = if total_cost
-          "Task complete (#{iterations} iterations, $#{cost.round(4)}, total: $#{total_cost.round(4)})"
-        else
-          "Task complete (#{iterations} iterations, $#{cost.round(4)})"
-        end
-        output = @renderer.render_success(message)
+
+        # Only show completion message for complex tasks (>5 iterations)
+        return if iterations <= 5
+
+        cache_tokens = cache_stats&.dig(:cache_read_input_tokens)
+        output = @renderer.render_task_complete(
+          iterations: iterations,
+          cost: cost,
+          duration: duration,
+          cache_tokens: cache_tokens
+        )
         append_output(output)
       end
 
