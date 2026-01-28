@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-01-28
+
+### Added
+- **New UI System (UI2)**: Complete component-based UI rewrite with modular architecture (InputArea, OutputArea, TodoArea, ToolComponent, ScreenBuffer, LayoutManager)
+- **Slash Commands**: `/help`, `/clear`, `/exit` for quick actions
+- **Prompt Caching**: Significantly improved performance and reduced API costs
+- **Theme System**: Support for multiple UI themes (base, hacker, minimal)
+- **Session Management**: Auto-keep last 10 sessions with datetime naming
+
+### Improved
+- Advanced inline input with Unicode support, multi-line handling, smooth scrolling, and rapid paste detection
+- Better terminal resize handling and flicker-free rendering
+- Work/idle status indicators with token cost display
+- Enhanced tool execution feedback and multiple tool rejection handling
+- Tool improvements: glob limits, grep performance, safe shell security, UTF-8 encoding fixes
+
+### Fixed
+- Input flickering, output scrolling, Ctrl+C behavior, image copying, base64 warnings, prompt cache issues
+
+### Removed
+- Legacy UI components (Banner, EnhancedPrompt, Formatter, StatusBar)
+- Max cost/iteration limits for better flexibility
+
 ## [0.5.6] - 2026-01-18
 
 ### Added
