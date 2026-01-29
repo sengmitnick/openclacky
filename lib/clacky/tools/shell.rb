@@ -284,10 +284,10 @@ module Clacky
 
         if exit_code == 0
           lines = stdout.lines.size
-          "✓ Completed#{lines > 0 ? " (#{lines} lines)" : ''}"
+          "[OK] Completed#{lines > 0 ? " (#{lines} lines)" : ''}"
         else
           error_msg = stderr.lines.first&.strip || "Failed"
-          "✗ Exit #{exit_code}: #{error_msg[0..50]}"
+          "[Exit #{exit_code}] #{error_msg[0..50]}"
         end
       end
     end

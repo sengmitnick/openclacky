@@ -212,11 +212,11 @@ module Clacky
 
       def format_result(result)
         if result[:error]
-          "✗ #{result[:error]}"
+          "[Error] #{result[:error]}"
         else
           matches = result[:total_matches] || 0
           files = result[:files_with_matches] || 0
-          msg = "✓ Found #{matches} matches in #{files} files"
+          msg = "[OK] Found #{matches} matches in #{files} files"
           
           # Add truncation info if present
           if result[:truncated] && result[:truncation_reason]

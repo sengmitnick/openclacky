@@ -149,11 +149,11 @@ module Clacky
 
       def format_result(result)
         if result[:error]
-          "✗ #{result[:error]}"
+          "[Error] #{result[:error]}"
         else
           title = result[:title] || 'Untitled'
           display_title = title.length > 40 ? "#{title[0..37]}..." : title
-          "✓ Fetched: #{display_title}"
+          "[OK] Fetched: #{display_title}"
         end
       end
     end

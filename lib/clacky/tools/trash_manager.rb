@@ -363,7 +363,7 @@ module Clacky
         when 'help'
           "❓ Help displayed"
         else
-          success ? "✓ #{action} completed" : "✗ #{action} failed"
+          success ? "[OK] #{action} completed" : "[Error] #{action} failed"
         end
       end
     end

@@ -122,13 +122,13 @@ module Clacky
 
       def format_result(result)
         if result[:error]
-          "✗ #{result[:error]}"
+          "[Error] #{result[:error]}"
         else
           count = result[:returned] || 0
           total = result[:total_matches] || 0
           truncated = result[:truncated] ? " (truncated)" : ""
           
-          msg = "✓ Found #{count}/#{total} files#{truncated}"
+          msg = "[OK] Found #{count}/#{total} files#{truncated}"
           
           # Add skipped files info if present
           if result[:skipped_files]

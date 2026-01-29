@@ -139,10 +139,10 @@ module Clacky
 
       def format_result(result)
         if result[:error]
-          "✗ #{result[:error]}"
+          "[Error] #{result[:error]}"
         else
           count = result[:count] || 0
-          "✓ Found #{count} results"
+          "[OK] Found #{count} results"
         end
       end
     end

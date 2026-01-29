@@ -74,22 +74,22 @@ module Clacky
 
       def format_result(result)
         if result[:error]
-          "✗ #{result[:error]}"
+          "[Error] #{result[:error]}"
         elsif result[:status]
           case result[:status]
           when 'started'
             cmd_preview = result[:command] ? result[:command][0..50] : ''
             output_preview = result[:output]&.lines&.first(2)&.join&.strip
-            msg = "✓ Started (PID: #{result[:pid]}, cmd: #{cmd_preview})"
+            msg = "[OK] Started (PID: #{result[:pid]}, cmd: #{cmd_preview})"
             msg += "\n  #{output_preview}" if output_preview && !output_preview.empty?
             msg
           when 'stopped'
-            "✓ Stopped"
+            "[OK] Stopped"
           when 'running'
             uptime = result[:uptime] ? "#{result[:uptime].round(1)}s" : "unknown"
-            "Running (#{uptime}, PID: #{result[:pid]})"
+            "[Running] #{uptime}, PID: #{result[:pid]}"
           when 'not_running'
-            "Not running"
+            "[Not Running]"
           else
             result[:status].to_s
           end

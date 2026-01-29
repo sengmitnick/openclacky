@@ -99,7 +99,7 @@ RSpec.describe Clacky::Tools::SafeShell do
       result = { exit_code: 0, stdout: "line1\nline2\nline3\n", stderr: "" }
       formatted = tool.format_result(result)
 
-      expect(formatted).to include("✓")
+      expect(formatted).to include("[OK]")
       expect(formatted).to include("lines")
     end
 
@@ -107,15 +107,14 @@ RSpec.describe Clacky::Tools::SafeShell do
       result = { exit_code: 0, stdout: "output", stderr: "", security_enhanced: true }
       formatted = tool.format_result(result)
 
-      expect(formatted).to include("🔒")
+      expect(formatted).to include("[Safe]")
     end
 
     it "shows error for failed commands" do
       result = { exit_code: 1, stdout: "", stderr: "Error message" }
       formatted = tool.format_result(result)
 
-      expect(formatted).to include("✗")
-      expect(formatted).to include("Exit 1")
+      expect(formatted).to include("[Exit 1]")
     end
   end
 

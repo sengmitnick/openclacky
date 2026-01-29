@@ -171,21 +171,52 @@ module Clacky
           buffer.force_encoding('UTF-8')
 
           # Keep reading available characters
+          loop_count = 0
+          empty_checks = 0
+          
           loop do
-            break unless IO.select([$stdin], nil, nil, 0)
+            # Check if there's data available immediately
+            has_data = IO.select([$stdin], nil, nil, 0)
+            
+            if has_data
+              next_char = $stdin.getc
+              break unless next_char
 
-            next_char = $stdin.getc
-            break unless next_char
-
-            next_char = next_char.force_encoding('UTF-8') if next_char.encoding != Encoding::UTF_8
-            buffer << next_char
+              next_char = next_char.force_encoding('UTF-8') if next_char.encoding != Encoding::UTF_8
+              buffer << next_char
+              loop_count += 1
+              empty_checks = 0  # Reset empty check counter
+            else
+              # No immediate data, but wait a bit to see if more is coming
+              # This handles the case where paste data arrives in chunks
+              empty_checks += 1
+              if empty_checks == 1
+                # First empty check - wait 10ms for more data
+                sleep 0.01
+              else
+                # Second empty check - really no more data
+                break
+              end
+            end
           end
 
           # If we buffered multiple characters or newlines, treat as rapid input (paste)
           if buffer.length > 1 || buffer.include?("\n") || buffer.include?("\r")
             # Remove any trailing \r or \n from rapid input buffer
             cleaned_buffer = buffer.gsub(/[\r\n]+\z/, '')
-            return { type: :rapid_input, text: cleaned_buffer } if cleaned_buffer.length > 0
+            if cleaned_buffer.length > 0
+              # Debug logging to file
+              File.open('/tmp/clacky_paste_debug.log', 'a') do |f|
+                f.puts "[#{Time.now}] rapid_input detected:"
+                f.puts "  - bytes: #{cleaned_buffer.bytesize}, chars: #{cleaned_buffer.length}, lines: #{cleaned_buffer.lines.count}"
+                f.puts "  - loop_count: #{loop_count}"
+                f.puts "  - is_rapid_input: #{is_rapid_input}, has_more_input: #{!!has_more_input}"
+                f.puts "  - first 200 chars: #{cleaned_buffer[0...200].inspect}"
+                f.puts "  - last 100 chars: #{cleaned_buffer[-100..-1].inspect}" if cleaned_buffer.length > 100
+                f.puts ""
+              end
+              return { type: :rapid_input, text: cleaned_buffer }
+            end
           end
 
           # Single character, continue to normal handling

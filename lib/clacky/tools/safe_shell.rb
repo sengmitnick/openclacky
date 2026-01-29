@@ -62,7 +62,7 @@ module Clacky
           {
             command: command,
             stdout: "",
-            stderr: "🔒 Security Protection: #{e.message}",
+            stderr: "[Security Protection] #{e.message}",
             exit_code: 126,
             success: false,
             security_blocked: true
@@ -153,7 +153,7 @@ module Clacky
           result[:safe_command] = safe_command
 
           # Add security note to stdout
-          security_note = "🔒 Command was automatically made safe\n"
+          security_note = "[Safe] Command was automatically made safe\n"
           result[:stdout] = security_note + (result[:stdout] || "")
         end
 
