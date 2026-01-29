@@ -359,6 +359,8 @@ module Clacky
             ui_controller.show_info("Session cleared. Starting fresh.")
             # Update session bar with reset values
             ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+            # Clear todo area display
+            ui_controller.update_todos([])
             next
           when "/exit", "/quit"
             ui_controller.stop
