@@ -178,4 +178,89 @@ RSpec.describe Clacky::Tools::FileReader do
       expect(formatted).to eq("File not found")
     end
   end
+
+  describe "binary file detection" do
+    context "when reading binary files" do
+      it "detects PNG images" do
+        Dir.mktmpdir do |dir|
+          png_file = File.join(dir, "test.png")
+          png_data = "\x89PNG\r\n\x1a\n".b
+          File.binwrite(png_file, png_data)
+
+          result = tool.execute(path: png_file)
+
+          expect(result[:binary]).to be true
+          expect(result[:format]).to eq("png")
+          expect(result[:mime_type]).to eq("image/png")
+          expect(result[:base64_data]).to be_a(String)
+        end
+      end
+
+      it "detects JPEG images" do
+        Dir.mktmpdir do |dir|
+          jpeg_file = File.join(dir, "test.jpg")
+          jpeg_data = "\xFF\xD8\xFF".b
+          File.binwrite(jpeg_file, jpeg_data)
+
+          result = tool.execute(path: jpeg_file)
+
+          expect(result[:binary]).to be true
+          expect(result[:format]).to eq("jpg")
+          expect(result[:mime_type]).to eq("image/jpeg")
+        end
+      end
+
+      it "detects PDF files" do
+        Dir.mktmpdir do |dir|
+          pdf_file = File.join(dir, "test.pdf")
+          pdf_data = "%PDF-1.4".b
+          File.binwrite(pdf_file, pdf_data)
+
+          result = tool.execute(path: pdf_file)
+
+          expect(result[:binary]).to be true
+          expect(result[:format]).to eq("pdf")
+          expect(result[:mime_type]).to eq("application/pdf")
+        end
+      end
+
+      it "returns error for unsupported binary files" do
+        Dir.mktmpdir do |dir|
+          bin_file = File.join(dir, "test.bin")
+          File.binwrite(bin_file, "\x00\x01\x02\x03".b * 100)
+
+          result = tool.execute(path: bin_file)
+
+          expect(result[:binary]).to be true
+          expect(result[:error]).to include("Binary file detected")
+          expect(result[:base64_data]).to be_nil
+        end
+      end
+    end
+  end
+
+  describe "#format_result_for_llm" do
+    it "formats image file for LLM" do
+      result = {
+        binary: true,
+        path: "/path/to/image.png",
+        format: "png",
+        size_bytes: 1024,
+        mime_type: "image/png",
+        base64_data: "iVBORw0KG..."
+      }
+      
+      formatted = tool.format_result_for_llm(result)
+      
+      expect(formatted[:type]).to eq("image")
+      expect(formatted[:mime_type]).to eq("image/png")
+      expect(formatted[:base64_data]).to eq("iVBORw0KG...")
+    end
+
+    it "returns result as-is for non-binary files" do
+      result = { content: "text content", lines_read: 10 }
+      formatted = tool.format_result_for_llm(result)
+      expect(formatted).to eq(result)
+    end
+  end
 end

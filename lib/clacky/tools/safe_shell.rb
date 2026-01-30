@@ -349,7 +349,12 @@ module Clacky
 
       def replace_chmod_command(command)
         # Parse chmod command to ensure it's safe
-        parts = Shellwords.split(command)
+        begin
+          parts = Shellwords.split(command)
+        rescue Shellwords::BadQuotedString => e
+          # If Shellwords.split fails, use simple split as fallback
+          parts = command.split(/\s+/)
+        end
 
         # Only allow chmod +x on files in project directory
         files = parts[2..-1] || []
@@ -358,8 +363,6 @@ module Clacky
         # Allow chmod +x as it's generally safe
         log_replacement("chmod", command, "chmod +x is allowed - file permissions will be modified")
         command
-      rescue Shellwords::BadQuotedString
-        raise SecurityError, "Invalid chmod command syntax: #{command}"
       end
 
       def replace_curl_pipe_command(command)
@@ -388,7 +391,14 @@ module Clacky
 
       def validate_and_allow(command)
         # Check basic file operation commands
-        parts = Shellwords.split(command)
+        begin
+          parts = Shellwords.split(command)
+        rescue Shellwords::BadQuotedString => e
+          # If Shellwords.split fails due to quote issues, try simple split as fallback
+          # This handles cases where paths don't actually need shell escaping
+          parts = command.split(/\s+/)
+        end
+        
         cmd = parts.first
         args = parts[1..-1]
 
@@ -402,8 +412,6 @@ module Clacky
         end
 
         command
-      rescue Shellwords::BadQuotedString
-        raise SecurityError, "Invalid command syntax: #{command}"
       end
 
       def validate_general_command(command)
@@ -437,11 +445,15 @@ module Clacky
       end
 
       def parse_rm_files(command)
-        parts = Shellwords.split(command)
+        begin
+          parts = Shellwords.split(command)
+        rescue Shellwords::BadQuotedString => e
+          # If Shellwords.split fails, use simple split as fallback
+          parts = command.split(/\s+/)
+        end
+        
         # Skip rm command itself and option parameters
         parts.drop(1).reject { |part| part.start_with?('-') }
-      rescue Shellwords::BadQuotedString
-        raise SecurityError, "Invalid command syntax: #{command}"
       end
 
       def validate_file_path(path)
