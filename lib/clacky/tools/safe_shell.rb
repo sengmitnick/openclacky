@@ -190,6 +190,24 @@ module Clacky
         end
       end
 
+      # Override format_result_for_llm to preserve security fields
+      def format_result_for_llm(result)
+        # If security blocked, return as-is (small and important)
+        return result if result[:security_blocked]
+        
+        # Call parent's format_result_for_llm to truncate output
+        compact = super(result)
+        
+        # Add security enhancement fields if present (they're small and important for LLM to understand)
+        if result[:security_enhanced]
+          compact[:security_enhanced] = true
+          compact[:original_command] = result[:original_command]
+          compact[:safe_command] = result[:safe_command]
+        end
+        
+        compact
+      end
+
       private def format_non_zero_exit(exit_code, stdout, stderr)
         stdout_lines = stdout.lines.size
         has_output = stdout_lines > 0

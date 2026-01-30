@@ -590,19 +590,22 @@ module Clacky
           # Use plain text to detect line type (remove ANSI codes)
           plain_line = plain_lines[index]&.chomp || line.gsub(/\e\[[0-9;]*m/, '').chomp
 
+          # Remove trailing newline from colored line to avoid double newlines
+          colored_line = line.chomp
+
           # Determine line type and number (use single line number for simplicity)
           if plain_line.start_with?('+') || plain_line.start_with?('-') || plain_line.start_with?(' ')
             new_line_num += 1
-            sprintf("%4d | %s", new_line_num, line)
+            sprintf("%4d | %s", new_line_num, colored_line)
           elsif plain_line.start_with?('@@')
             # Diff header: extract line numbers from @@ -old_start,old_count +new_start,new_count @@
             if plain_line =~ /@@ -(\d+)(?:,\d+)? (\d+)(?:,\d+)? @@/
               new_line_num = $2.to_i - 1
             end
-            sprintf("%4s | %s", "", line)
+            sprintf("%4s | %s", "", colored_line)
           else
             # Other lines (headers, etc.)
-            sprintf("%4s | %s", "", line)
+            sprintf("%4s | %s", "", colored_line)
           end
         end
 

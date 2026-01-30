@@ -137,7 +137,7 @@ module Clacky
       user_messages = @messages.select do |m|
         m[:role] == "user" && !m[:system_injected]
       end
-      
+
       # Extract text content from the last N user messages
       user_messages.last(limit).map do |msg|
         extract_text_from_content(msg[:content])
@@ -166,7 +166,7 @@ module Clacky
       @previous_total_tokens = 0  # Reset token tracking for new task
       @task_start_iterations = @iterations  # Track starting iterations for this task
       @task_start_cost = @total_cost  # Track starting cost for this task
-      
+
       # Track cache stats for current task
       @task_cache_stats = {
         cache_creation_input_tokens: 0,
@@ -538,7 +538,7 @@ module Clacky
               denial_message += ": #{confirmation[:feedback]}"
             end
             @ui&.show_warning(denial_message)
-            
+
             denied = true
             user_feedback = confirmation[:feedback]
             feedback = user_feedback if user_feedback
@@ -666,7 +666,7 @@ module Clacky
         # Check if the command is a slow command
         command = args[:command] || args['command']
         return false unless command
-        
+
         # List of slow command patterns
         slow_patterns = [
           /bundle\s+(install|exec\s+rspec|exec\s+rake)/,
@@ -679,7 +679,7 @@ module Clacky
           /pytest/,
           /jest/
         ]
-        
+
         slow_patterns.any? { |pattern| command.match?(pattern) }
       when 'web_fetch', 'web_search'
         true  # Network operations can be slow
@@ -692,7 +692,7 @@ module Clacky
     private def build_tool_progress_message(tool_name, args)
       case tool_name.to_s.downcase
       when 'shell', 'safe_shell'
-        "Running..."
+        "Running command"
       when 'web_fetch'
         "Fetching web page"
       when 'web_search'
@@ -751,15 +751,15 @@ module Clacky
         @cache_stats[:raw_api_usage_samples] << raw_api_usage
         @cache_stats[:raw_api_usage_samples] = @cache_stats[:raw_api_usage_samples].last(3)
       end
-      
+
       # Track cache usage for current task
       if @task_cache_stats
         @task_cache_stats[:total_requests] += 1
-        
+
         if usage[:cache_creation_input_tokens]
           @task_cache_stats[:cache_creation_input_tokens] += usage[:cache_creation_input_tokens]
         end
-        
+
         if usage[:cache_read_input_tokens]
           @task_cache_stats[:cache_read_input_tokens] += usage[:cache_read_input_tokens]
           @task_cache_stats[:cache_hit_requests] += 1
@@ -1197,10 +1197,10 @@ module Clacky
     def build_result(status, error: nil)
       # Calculate iterations for current task only
       task_iterations = @iterations - (@task_start_iterations || 0)
-      
+
       # Calculate cost for current task only
       task_cost = @total_cost - (@task_start_cost || 0)
-      
+
       {
         status: status,
         session_id: @session_id,

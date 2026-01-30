@@ -290,6 +290,73 @@ module Clacky
           "[Exit #{exit_code}] #{error_msg[0..50]}"
         end
       end
+
+      # Format result for LLM consumption - limit output size to save tokens
+      # Maximum characters to include in LLM output
+      MAX_LLM_OUTPUT_CHARS = 2000
+      
+      def format_result_for_llm(result)
+        # Return error info as-is if command failed or timed out
+        return result if result[:error] || result[:state] == 'TIMEOUT' || result[:state] == 'WAITING_INPUT'
+        
+        stdout = result[:stdout] || ""
+        stderr = result[:stderr] || ""
+        exit_code = result[:exit_code] || 0
+        
+        # Build compact result with truncated output
+        compact = {
+          command: result[:command],
+          exit_code: exit_code,
+          success: result[:success]
+        }
+        
+        # Add elapsed time if available
+        compact[:elapsed] = result[:elapsed] if result[:elapsed]
+        
+        # Truncate stdout to save tokens
+        if stdout.empty?
+          compact[:stdout] = ""
+        else
+          stdout_lines = stdout.lines
+          stdout_line_count = stdout_lines.length
+          
+          if stdout.length <= MAX_LLM_OUTPUT_CHARS
+            compact[:stdout] = stdout
+          else
+            # Take first N lines that fit within the character limit
+            accumulated_chars = 0
+            lines_to_include = []
+            
+            stdout_lines.each do |line|
+              break if accumulated_chars + line.length > MAX_LLM_OUTPUT_CHARS
+              lines_to_include << line
+              accumulated_chars += line.length
+            end
+            
+            compact[:stdout] = lines_to_include.join
+            compact[:stdout] += "\n\n... [Output truncated for LLM: showing #{lines_to_include.length} of #{stdout_line_count} lines, #{accumulated_chars} of #{stdout.length} chars] ...\n"
+          end
+        end
+        
+        # Truncate stderr to save tokens (usually more important than stdout, so keep more)
+        if stderr.empty?
+          compact[:stderr] = ""
+        else
+          stderr_line_count = stderr.lines.length
+          
+          if stderr.length <= MAX_LLM_OUTPUT_CHARS
+            compact[:stderr] = stderr
+          else
+            compact[:stderr] = stderr[0...MAX_LLM_OUTPUT_CHARS]
+            compact[:stderr] += "\n\n... [Error output truncated for LLM: showing #{MAX_LLM_OUTPUT_CHARS} of #{stderr.length} chars, #{stderr_line_count} lines] ...\n"
+          end
+        end
+        
+        # Add output_truncated flag
+        compact[:output_truncated] = result[:output_truncated] if result[:output_truncated]
+        
+        compact
+      end
     end
   end
 end

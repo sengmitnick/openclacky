@@ -213,5 +213,123 @@ RSpec.describe Clacky::Tools::SafeShell do
       expect(result[:exit_code]).to eq(0)
       # Should execute in spec directory
     end
+
+  describe "#format_result_for_llm" do
+    it "truncates long stdout output to save tokens" do
+      # Create a result with very long output (over 2000 chars)
+      long_output = "Line of text\n" * 500  # 6500+ chars
+      result = {
+        command: "generate_large_output",
+        exit_code: 0,
+        success: true,
+        stdout: long_output,
+        stderr: ""
+      }
+
+      compact = tool.format_result_for_llm(result)
+
+      expect(compact[:stdout].length).to be < long_output.length
+      expect(compact[:stdout]).to include("Output truncated for LLM")
+      expect(compact[:exit_code]).to eq(0)
+      expect(compact[:success]).to be true
+    end
+
+    it "truncates long stderr output to save tokens" do
+      long_error = "Error line\n" * 500  # 5500+ chars
+      result = {
+        command: "failing_command",
+        exit_code: 1,
+        success: false,
+        stdout: "",
+        stderr: long_error
+      }
+
+      compact = tool.format_result_for_llm(result)
+
+      expect(compact[:stderr].length).to be < long_error.length
+      expect(compact[:stderr]).to include("Error output truncated for LLM")
+    end
+
+    it "preserves short output without truncation" do
+      short_output = "Hello\nWorld\n"
+      result = {
+        command: "echo_test",
+        exit_code: 0,
+        success: true,
+        stdout: short_output,
+        stderr: ""
+      }
+
+      compact = tool.format_result_for_llm(result)
+
+      expect(compact[:stdout]).to eq(short_output)
+      expect(compact[:stdout]).not_to include("truncated")
+    end
+
+    it "preserves security enhancement fields" do
+      result = {
+        command: "rm test.txt",
+        exit_code: 0,
+        success: true,
+        stdout: "[Safe] Command was automatically made safe\noutput",
+        stderr: "",
+        security_enhanced: true,
+        original_command: "rm test.txt",
+        safe_command: "mv test.txt /path/to/trash"
+      }
+
+      compact = tool.format_result_for_llm(result)
+
+      expect(compact[:security_enhanced]).to be true
+      expect(compact[:original_command]).to eq("rm test.txt")
+      expect(compact[:safe_command]).to eq("mv test.txt /path/to/trash")
+    end
+
+    it "returns security_blocked results as-is" do
+      result = {
+        command: "sudo dangerous",
+        stdout: "",
+        stderr: "[Security Protection] sudo commands are not allowed",
+        exit_code: 126,
+        success: false,
+        security_blocked: true
+      }
+
+      compact = tool.format_result_for_llm(result)
+
+      expect(compact).to eq(result)
+    end
+
+    it "preserves error states and timeout info" do
+      result = {
+        command: "long_running_cmd",
+        stdout: "partial output",
+        stderr: "Command timed out",
+        exit_code: -1,
+        success: false,
+        state: 'TIMEOUT',
+        timeout_type: :hard_timeout
+      }
+
+      compact = tool.format_result_for_llm(result)
+
+      expect(compact).to eq(result)
+    end
+
+    it "includes elapsed time if available" do
+      result = {
+        command: "quick_cmd",
+        exit_code: 0,
+        success: true,
+        stdout: "done",
+        stderr: "",
+        elapsed: 1.234
+      }
+
+      compact = tool.format_result_for_llm(result)
+
+      expect(compact[:elapsed]).to eq(1.234)
+    end
+  end
 end
 
