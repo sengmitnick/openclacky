@@ -866,8 +866,9 @@ module Clacky
       }
     end
 
-    # Compression thresholds (in tokens)
-    COMPRESSION_THRESHOLD = 80_000  # Trigger compression when exceeding this
+    # Compression thresholds
+    COMPRESSION_THRESHOLD = 80_000  # Trigger compression when exceeding this (in tokens)
+    MESSAGE_COUNT_THRESHOLD = 100   # Trigger compression when exceeding this (in message count)
     TARGET_COMPRESSED_TOKENS = 70_000  # Target size after compression
     MAX_RECENT_MESSAGES = 30  # Keep this many recent message pairs intact
 
@@ -875,18 +876,30 @@ module Clacky
       # Check if compression is enabled
       return unless @config.enable_compression
 
-      # Calculate total tokens
+      # Calculate total tokens and message count
       token_counts = total_message_tokens
       total_tokens = token_counts[:total]
+      message_count = @messages.length
 
-      # Only compress if we exceed the threshold
-      return if total_tokens < COMPRESSION_THRESHOLD
+      # Check if we should trigger compression
+      # Either: token count exceeds threshold OR message count exceeds threshold
+      token_threshold_exceeded = total_tokens >= COMPRESSION_THRESHOLD
+      message_count_exceeded = message_count >= MESSAGE_COUNT_THRESHOLD
+
+      # Only compress if we exceed at least one threshold
+      return unless token_threshold_exceeded || message_count_exceeded
 
       # Calculate how much we need to reduce
       reduction_needed = total_tokens - TARGET_COMPRESSED_TOKENS
 
       # Don't compress if reduction is minimal (< 10% of current size)
-      return if reduction_needed < (total_tokens * 0.1)
+      # Only apply this check when triggered by token threshold
+      if token_threshold_exceeded && reduction_needed < (total_tokens * 0.1)
+        return
+      end
+
+      # If only message count threshold is exceeded, force compression
+      # to keep conversation history manageable
 
       # Calculate target size for recent messages based on compression level
       target_recent_count = calculate_target_recent_count(reduction_needed)

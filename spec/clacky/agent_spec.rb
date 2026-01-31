@@ -451,6 +451,38 @@ RSpec.describe Clacky::Agent do
         expect(tool_results.map { |m| m[:tool_call_id] }.sort).to eq(["call_1", "call_2"].sort)
       end
     end
+
+    it "triggers compression when message count exceeds threshold even if tokens are below threshold" do
+      allow(client).to receive(:send_messages_with_tools)
+        .and_return(mock_api_response(content: "done"))
+
+      messages = compression_agent.instance_variable_get(:@messages)
+      messages << { role: "system", content: "System prompt" }
+
+      # Add exactly 100 short messages (token count will be well below 80K threshold)
+      # System + 100 user + 100 assistant = 201 messages
+      100.times do |i|
+        # Short content to keep token count low
+        short_content = "Short message #{i}"
+        messages << { role: "user", content: short_content }
+        messages << { role: "assistant", content: "Response #{i}" }
+      end
+
+      initial_count = messages.size
+      initial_tokens = compression_agent.send(:total_message_tokens)[:total]
+
+      # Verify token count is below token threshold but message count exceeds 100
+      expect(initial_tokens).to be < 80_000
+      expect(initial_count).to be >= 201
+
+      compression_agent.send(:compress_messages_if_needed)
+      final_count = compression_agent.instance_variable_get(:@messages).size
+      final_tokens = compression_agent.send(:total_message_tokens)[:total]
+
+      # Compression should have been triggered by message count threshold
+      expect(final_count).to be < initial_count
+      expect(final_tokens).to be < initial_tokens
+    end
   end
 
   describe ".from_session" do
