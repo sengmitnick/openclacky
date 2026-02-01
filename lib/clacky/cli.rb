@@ -251,6 +251,336 @@ module Clacky
       say "https://www.anthropic.com/pricing\n\n", :blue
     end
 
+    desc "skills", "Manage and list skills"
+    long_desc <<-LONGDESC
+      Manage and list skills that extend Claude's capabilities.
+
+      Skills are reusable prompts with YAML frontmatter that define
+      when and how Claude should use them. Skills can be invoked
+      directly with /skill-name or loaded automatically based on context.
+
+      Skill locations (in priority order):
+        - .clacky/skills/     (project, highest priority)
+        - ~/.clacky/skills/   (user global)
+        - .claude/skills/     (project, compatibility)
+        - ~/.claude/skills/   (user global, compatibility)
+
+      Subcommands:
+        list        - List all available skills
+        show <name> - Show details of a specific skill
+
+      Examples:
+        $ clacky skills list
+        $ clacky skills show explain-code
+    LONGDESC
+    subcommand_option_names = []
+
+    # Main skills command - delegates to subcommands or shows help
+    def skills(*args)
+      if args.empty?
+        invoke :help, ["skills"]
+      else
+        subcommand = args.shift
+        case subcommand
+        when "list"
+          skills_list
+        when "show"
+          skills_show(args.first)
+        when "create"
+          # Parse options for create
+          name = args.first
+          opts = {}
+          i = 1
+          while i < args.length
+            if args[i] == "--description"
+              opts[:description] = args[i + 1]
+              i += 2
+            elsif args[i] == "--content"
+              opts[:content] = args[i + 1]
+              i += 2
+            elsif args[i] == "--project"
+              opts[:project] = true
+              i += 1
+            else
+              i += 1
+            end
+          end
+          skills_create_with_opts(name, opts)
+        when "delete"
+          skills_delete(args.first)
+        else
+          say "Unknown skill subcommand: #{subcommand}", :red
+          invoke :help, ["skills"]
+        end
+      end
+    end
+
+    desc "skills list", "List all available skills"
+    long_desc <<-LONGDESC
+      List all available skills from all configured locations:
+        - Project skills (.clacky/skills/)
+        - Global skills (~/.clacky/skills/)
+        - Compatible skills (.claude/skills/, ~/.claude/skills/)
+
+      Each skill shows:
+        - Name and slash command
+        - Description
+        - Whether it can be auto-invoked by Claude
+        - Whether it supports user invocation
+    LONGDESC
+    def skills_list
+      loader = Clacky::SkillLoader.new(Dir.pwd)
+      all_skills = loader.load_all
+
+      if all_skills.empty?
+        say "\n📚 No skills found.\n", :yellow
+        say "\nCreate your first skill:", :cyan
+        say "  ~/.clacky/skills/<skill-name>/SKILL.md", :white
+        say "  or .clacky/skills/<skill-name>/SKILL.md\n", :white
+        return
+      end
+
+      say "\n📚 Available Skills (#{all_skills.size})\n\n", :green
+
+      all_skills.each do |skill|
+        # Build status indicators
+        indicators = []
+        indicators << "🤖" if skill.model_invocation_allowed?
+        indicators << "👤" if skill.user_invocable?
+        indicators << "🔀" if skill.forked_context?
+
+        say "  /#{skill.identifier}", :cyan
+        say " #{indicators.join(' ')}" unless indicators.empty?
+        say "\n"
+
+        # Show description (truncated if too long)
+        desc = skill.context_description
+        if desc.length > 60
+          desc = desc[0..57] + "..."
+        end
+        say "     #{desc}\n", :white
+
+        # Show location with priority indicator
+        location = case loader.loaded_from[skill.identifier]
+        when :project_clacky
+          "project .clacky"
+        when :project_claude
+          "project .claude (compat)"
+        when :global_clacky
+          "global .clacky"
+        when :global_claude
+          "global .claude (compat)"
+        else
+          "unknown"
+        end
+        say "     [#{location}]\n", :yellow
+
+        say "\n"
+      end
+
+      # Show errors if any
+      if loader.errors.any?
+        say "\n⚠️  Warnings:\n", :yellow
+        loader.errors.each do |error|
+          say "  - #{error}\n", :red
+        end
+      end
+    end
+
+    desc "skills show NAME", "Show details of a specific skill"
+    long_desc <<-LONGDESC
+      Show the full content and metadata of a specific skill.
+
+      NAME is the skill name (without the leading /).
+
+      Examples:
+        $ clacky skills show explain-code
+    LONGDESC
+    def skills_show(name = nil)
+      unless name
+        say "Error: Skill name required.\n", :red
+        say "Usage: clacky skills show <name>\n", :yellow
+        exit 1
+      end
+
+      loader = Clacky::SkillLoader.new(Dir.pwd)
+      all_skills = loader.load_all
+
+      # Try to find the skill
+      skill = all_skills.find { |s| s.identifier == name }
+
+      unless skill
+        # Try prefix matching
+        matching = all_skills.select { |s| s.identifier.start_with?(name) }
+        if matching.size == 1
+          skill = matching.first
+        else
+          say "\n❌ Skill '#{name}' not found.\n", :red
+          say "\nAvailable skills:\n", :yellow
+          all_skills.each { |s| say "  /#{s.identifier}\n", :cyan }
+          exit 1
+        end
+      end
+
+      # Display skill details
+      say "\n📖 Skill: /#{skill.identifier}\n\n", :green
+
+      say "Description:\n", :yellow
+      say "  #{skill.context_description}\n\n", :white
+
+      say "Status:\n", :yellow
+      say "  Auto-invokable: #{skill.model_invocation_allowed? ? 'Yes' : 'No'}\n", :white
+      say "  User-invokable: #{skill.user_invocable? ? 'Yes' : 'No'}\n", :white
+      say "  Forked context: #{skill.forked_context? ? 'Yes' : 'No'}\n", :white
+
+      if skill.allowed_tools
+        say "  Allowed tools: #{skill.allowed_tools.join(', ')}\n", :white
+      end
+
+      say "\nLocation: #{skill.source_path}\n\n", :yellow
+
+      say "Content:\n", :yellow
+      say "-" * 60 + "\n", :white
+      say skill.content, :white
+      say "\n" + "-" * 60 + "\n", :white
+
+      # Show supporting files if any
+      if skill.has_supporting_files?
+        say "\nSupporting files:\n", :yellow
+        skill.supporting_files.each do |file|
+          say "  - #{file.relative_path_from(Pathname.new(Dir.pwd))}\n", :cyan
+        end
+      end
+    end
+
+    desc "skills create NAME", "Create a new skill"
+    long_desc <<-LONGDESC
+      Create a new skill in the global skills directory.
+
+      NAME is the skill name (lowercase letters, numbers, and hyphens only).
+
+      This creates a new directory at ~/.clacky/skills/NAME/SKILL.md
+      with a template skill file.
+
+      Options:
+        --description  Set the skill description
+        --content      Set the skill content (use - for stdin)
+        --project      Create in project .clacky/skills/ instead
+
+      Examples:
+        $ clacky skills create explain-code --description "Explain code with diagrams"
+        $ clacky skills create deploy --description "Deploy application" --project
+    LONGDESC
+    option :description, type: :string, desc: "Skill description"
+    option :content, type: :string, desc: "Skill content (use - for stdin)"
+    option :project, type: :boolean, desc: "Create in project directory"
+    def skills_create(name = nil)
+      unless name
+        say "Error: Skill name required.\n", :red
+        say "Usage: clacky skills create <name>\n", :yellow
+        exit 1
+      end
+
+      # Validate name
+      unless name.match?(/^[a-z0-9][a-z0-9-]*$/)
+        say "Error: Invalid skill name '#{name}'.\n", :red
+        say "Use lowercase letters, numbers, and hyphens only.\n", :yellow
+        exit 1
+      end
+
+      # Get description
+      description = options[:description] || ask("Skill description: ").to_s
+
+      # Get content
+      if options[:content] == "-"
+        say "Enter skill content (end with Ctrl+D):\n", :yellow
+        content = STDIN.read
+      elsif options[:content]
+        content = options[:content]
+      else
+        content = "Describe the skill here..."
+      end
+
+      # Determine location
+      location = options[:project] ? :project : :global
+
+      # Create the skill
+      loader = Clacky::SkillLoader.new(Dir.pwd)
+      skill = loader.create_skill(name, content, description, location: location)
+
+      skill_path = skill.directory
+      say "\n✅ Skill created at: #{skill_path}\n", :green
+      say "\nYou can invoke it with: /#{name}\n", :cyan
+    end
+
+    # Helper method for skills command dispatcher
+    no_commands do
+      def skills_create_with_opts(name, opts = {})
+        unless name
+          say "Error: Skill name required.\n", :red
+          say "Usage: clacky skills create <name>\n", :yellow
+          exit 1
+        end
+
+        # Validate name
+        unless name.match?(/^[a-z0-9][a-z0-9-]*$/)
+          say "Error: Invalid skill name '#{name}'.\n", :red
+          say "Use lowercase letters, numbers, and hyphens only.\n", :yellow
+          exit 1
+        end
+
+        description = opts[:description] || ask("Skill description: ").to_s
+        content = opts[:content] || "Describe the skill here..."
+        location = opts[:project] ? :project : :global
+
+        loader = Clacky::SkillLoader.new(Dir.pwd)
+        skill = loader.create_skill(name, content, description, location: location)
+
+        skill_path = skill.directory
+        say "\n✅ Skill created at: #{skill_path}\n", :green
+        say "\nYou can invoke it with: /#{name}\n", :cyan
+      end
+    end
+
+    desc "skills delete NAME", "Delete a skill"
+    long_desc <<-LONGDESC
+      Delete a skill by name.
+
+      NAME is the skill name (without the leading /).
+
+      Examples:
+        $ clacky skills delete explain-code
+    LONGDESC
+    def skills_delete(name = nil)
+      unless name
+        say "Error: Skill name required.\n", :red
+        say "Usage: clacky skills delete <name>\n", :yellow
+        exit 1
+      end
+
+      loader = Clacky::SkillLoader.new(Dir.pwd)
+      all_skills = loader.load_all
+
+      # Find the skill
+      skill = all_skills.find { |s| s.identifier == name }
+
+      unless skill
+        say "Error: Skill '#{name}' not found.\n", :red
+        exit 1
+      end
+
+      # Confirm deletion
+      prompt = TTY::Prompt.new
+      unless prompt.yes?("Delete skill '/#{name}' at #{skill.directory}?")
+        say "Cancelled.\n", :yellow
+        exit 0
+      end
+
+      # Delete the skill
+      loader.delete_skill(name)
+      say "\n✅ Skill '/#{name}' deleted.\n", :green
+    end
+
     no_commands do
       def build_agent_config(config)
         AgentConfig.new(
@@ -319,7 +649,8 @@ module Clacky
       end
 
       def load_session_by_number(client, agent_config, session_manager, working_dir, identifier)
-        sessions = session_manager.list(current_dir: working_dir, limit: 10)
+        # Get a larger list to search through (for ID prefix matching)
+        sessions = session_manager.list(current_dir: working_dir, limit: 100)
 
         if sessions.empty?
           say "No sessions found.", :yellow
@@ -329,7 +660,8 @@ module Clacky
         session_data = nil
 
         # Check if identifier is a number (index-based)
-        if identifier.match?(/^\d+$/)
+        # Heuristic: If it's a small number (1-99), treat as index; otherwise treat as session ID prefix
+        if identifier.match?(/^\d+$/) && identifier.to_i <= 99
           index = identifier.to_i - 1
           if index < 0 || index >= sessions.size
             say "Invalid session number. Use -l to list available sessions.", :red
@@ -398,6 +730,9 @@ module Clacky
 
         # Inject UI into agent
         agent.instance_variable_set(:@ui, ui_controller)
+
+        # Set skill loader for command suggestions
+        ui_controller.set_skill_loader(agent.skill_loader)
 
         # Track agent thread state
         agent_thread = nil
