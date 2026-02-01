@@ -3,6 +3,8 @@
 require_relative "clacky/version"
 require_relative "clacky/config"
 require_relative "clacky/client"
+require_relative "clacky/skill"
+require_relative "clacky/skill_loader"
 
 # Agent system
 require_relative "clacky/model_pricing"
