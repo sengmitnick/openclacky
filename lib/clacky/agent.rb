@@ -49,6 +49,9 @@ module Clacky
       Adding todos is NOT completion - it's just the planning phase!
       Workflow: add todo 1 → add todo 2 → add todo 3 → START WORKING on todo 1 → complete(1) → work on todo 2 → complete(2) → etc.
       NEVER stop after just adding todos without executing them!
+
+      NOTE: Available skills are listed below in the AVAILABLE SKILLS section.
+      When a user's request matches a skill, you MUST use the skill tool instead of implementing it yourself.
     PROMPT
 
     def initialize(client, config = {}, working_dir: nil, ui: nil)
@@ -82,6 +85,9 @@ module Clacky
       # Compression tracking
       @compression_level = 0  # Tracks how many times we've compressed (for progressive summarization)
       @compressed_summaries = []  # Store summaries from previous compressions for reference
+
+      # Skill loader for skill management
+      @skill_loader = SkillLoader.new(@working_dir)
 
       # Register built-in tools
       register_builtin_tools
@@ -273,6 +279,100 @@ module Clacky
       end
     end
 
+    # ===== Skill-related methods =====
+
+    # Get the skill loader instance
+    # @return [SkillLoader]
+    def skill_loader
+      @skill_loader
+    end
+
+    # Load all skills from configured locations
+    # @return [Array<Skill>]
+    def load_skills
+      @skill_loader.load_all
+    end
+
+    # Check if input is a skill command and process it
+    # @param input [String] User input
+    # @return [Hash, nil] Returns { skill: Skill, arguments: String } if skill command, nil otherwise
+    def parse_skill_command(input)
+      # Check for slash command pattern
+      if input.start_with?("/")
+        # Extract command and arguments
+        match = input.match(%r{^/(\S+)(?:\s+(.*))?$})
+        return nil unless match
+
+        skill_name = match[1]
+        arguments = match[2] || ""
+
+        # Find skill by command
+        skill = @skill_loader.find_by_command("/#{skill_name}")
+        return nil unless skill
+
+        # Check if user can invoke this skill
+        unless skill.user_invocable?
+          return nil
+        end
+
+        { skill: skill, arguments: arguments }
+      else
+        nil
+      end
+    end
+
+    # Execute a skill command
+    # @param input [String] User input (should be a skill command)
+    # @return [String] The expanded prompt with skill content
+    def execute_skill_command(input)
+      parsed = parse_skill_command(input)
+      return input unless parsed
+
+      skill = parsed[:skill]
+      arguments = parsed[:arguments]
+
+      # Process skill content with arguments
+      expanded_content = skill.process_content(arguments)
+
+      # Log skill usage
+      @ui&.log("Executing skill: #{skill.identifier}", level: :info)
+
+      expanded_content
+    end
+
+    # Generate skill context - loads all auto-invocable skills
+    # @return [String] Skill context to add to system prompt
+    def build_skill_context
+      # Load all auto-invocable skills
+      all_skills = @skill_loader.load_all
+      auto_invocable = all_skills.select(&:model_invocation_allowed?)
+
+      return "" if auto_invocable.empty?
+
+      context = "\n\n" + "=" * 80 + "\n"
+      context += "AVAILABLE SKILLS:\n"
+      context += "=" * 80 + "\n\n"
+      context += "CRITICAL SKILL USAGE RULES:\n"
+      context += "- When a user's request matches any available skill, this is a BLOCKING REQUIREMENT:\n"
+      context += "  invoke the relevant skill tool BEFORE generating any other response about the task\n"
+      context += "- NEVER mention a skill without actually calling the skill tool\n"
+      context += "- NEVER implement the skill's functionality yourself - always delegate to the skill\n"
+      context += "- Skills provide specialized capabilities - use them instead of manual implementation\n"
+      context += "- When users reference '/<skill-name>' (e.g., '/pptx'), they are requesting a skill\n\n"
+      context += "Workflow: Use file_reader to read the SKILL.md file, then follow its instructions.\n\n"
+      context += "Available skills:\n\n"
+
+      auto_invocable.each do |skill|
+        skill_md_path = skill.directory.join("SKILL.md")
+        context += "- name: #{skill.identifier}\n"
+        context += "  description: #{skill.context_description}\n"
+        context += "  SKILL.md: #{skill_md_path}\n\n"
+      end
+
+      context += "\n"
+      context
+    end
+
     # Generate session data for saving
     # @param status [Symbol] Status of the last task: :success, :error, or :interrupted
     # @param error_message [String] Error message if status is :error
@@ -414,6 +514,10 @@ module Clacky
         prompt += "⚠️ IMPORTANT: Follow these project-specific rules at all times!\n"
         prompt += "=" * 80
       end
+
+      # Add all loaded skills to system prompt
+      skill_context = build_skill_context
+      prompt += skill_context if skill_context && !skill_context.empty?
 
       prompt
     end
@@ -579,6 +683,11 @@ module Clacky
             args[:todos_storage] = @todos
           end
 
+          # For safe_shell, skip safety check if user has already confirmed
+          if call[:name] == "safe_shell" || call[:name] == "shell"
+            args[:skip_safety_check] = true
+          end
+
           # Show progress for potentially slow tools (no prefix newline)
           if potentially_slow_tool?(call[:name], args)
             progress_message = build_tool_progress_message(call[:name], args)
@@ -601,6 +710,17 @@ module Clacky
           @ui&.show_tool_result(tool.format_result(result))
           results << build_success_result(call, result)
         rescue StandardError => e
+          # Log complete error information to debug_logs for troubleshooting
+          @debug_logs << {
+            timestamp: Time.now.iso8601,
+            event: "tool_execution_error",
+            tool_name: call[:name],
+            tool_args: call[:arguments],
+            error_class: e.class.name,
+            error_message: e.message,
+            backtrace: e.backtrace&.first(20) # Keep first 20 lines of backtrace
+          }
+          
           @hooks.trigger(:on_tool_error, call, e)
           @ui&.show_tool_error(e)
           results << build_error_result(call, e.message)
@@ -814,7 +934,9 @@ module Clacky
                content
              elsif content.is_a?(Array)
                # Handle content arrays (e.g., with images)
-               content.map { |c| c[:text] if c.is_a?(Hash) }.compact.join
+               # Add safety check to prevent nil.compact error
+               mapped = content.map { |c| c[:text] if c.is_a?(Hash) }
+               (mapped || []).compact.join
              else
                content.to_s
              end
@@ -917,9 +1039,12 @@ module Clacky
 
       # Get the most recent N messages, ensuring tool_calls/tool results pairs are kept together
       recent_messages = get_recent_messages_with_tool_pairs(@messages, target_recent_count)
+      recent_messages = [] if recent_messages.nil?
 
       # Get messages to compress (everything except system and recent)
       messages_to_compress = @messages.reject { |m| m[:role] == "system" || recent_messages.include?(m) }
+
+      @ui&.show_info("  debug: total=#{@messages.size}, recent=#{recent_messages.size}, to_compress=#{messages_to_compress.size}")
 
       return if messages_to_compress.empty?
 
@@ -945,14 +1070,16 @@ module Clacky
 
     # Calculate how many recent messages to keep based on how much we need to compress
     private def calculate_target_recent_count(reduction_needed)
-      # Estimate tokens per message pair (user + assistant + tool results)
-      tokens_per_pair = 800  # Rough estimate
+      # We want recent messages to be around 20-30% of the total target
+      # This keeps the context window useful without being too large
+      tokens_per_message = 500  # Average estimate for a message with content
 
-      # Calculate target based on reduction needed
-      target_messages = (TARGET_COMPRESSED_TOKENS / tokens_per_pair).to_i
+      # Target recent messages budget (~20% of target compressed size)
+      recent_budget = (TARGET_COMPRESSED_TOKENS * 0.2).to_i
+      target_messages = (recent_budget / tokens_per_message).to_i
 
-      # Ensure we keep at least the minimum
-      [target_messages, MAX_RECENT_MESSAGES].max
+      # Clamp to reasonable bounds
+      [[target_messages, 20].max, MAX_RECENT_MESSAGES].min
     end
 
     # Generate hierarchical summary based on compression level
@@ -987,6 +1114,8 @@ module Clacky
 
     # Extract key information from messages for summarization
     private def extract_key_information(messages)
+      return empty_extraction_data if messages.nil?
+
       {
         # Message counts
         user_msgs: messages.count { |m| m[:role] == "user" },
@@ -994,52 +1123,96 @@ module Clacky
         tool_msgs: messages.count { |m| m[:role] == "tool" },
 
         # Tools used
-        tools_used: extract_tools_used(messages),
+        tools_used: extract_from_messages(messages, :assistant) { |m| extract_tool_names(m[:tool_calls]) },
 
         # Files created/modified
-        files_created: extract_created_files(messages),
-        files_modified: extract_modified_files(messages),
+        files_created: extract_from_messages(messages, :tool) { |m| filter_write_results(parse_write_result(m[:content]), :created) },
+        files_modified: extract_from_messages(messages, :tool) { |m| filter_write_results(parse_write_result(m[:content]), :modified) },
 
-        # Key decisions
-        decisions: extract_decisions(messages),
+        # Key decisions (limit to first 5)
+        decisions: extract_from_messages(messages, :assistant) { |m| extract_decision_text(m[:content]) }.first(5),
 
         # Completed tasks (from TODO results)
-        completed_tasks: extract_completed_tasks(messages),
+        completed_tasks: extract_from_messages(messages, :tool) { |m| filter_todo_results(parse_todo_result(m[:content]), :completed) },
 
         # Current in-progress work
-        in_progress: extract_in_progress(messages),
+        in_progress: find_in_progress(messages),
 
         # Key results from shell commands
-        shell_results: extract_shell_results(messages)
+        shell_results: extract_from_messages(messages, :tool) { |m| parse_shell_result(m[:content]) }
       }
     end
 
-    private def extract_tools_used(messages)
-      messages
-        .select { |m| m[:role] == "assistant" && m[:tool_calls] }
-        .flat_map { |m| m[:tool_calls].map { |tc| tc.dig(:function, :name) } }
+    # Helper: safely extract from messages with proper nil handling
+    private def extract_from_messages(messages, role_filter = nil, &block)
+      return [] if messages.nil?
+
+      results = messages
+        .select { |m| role_filter.nil? || m[:role] == role_filter.to_s }
+        .map(&block)
         .compact
-        .uniq
+
+      # Flatten if we have nested arrays (from methods returning arrays of items)
+      results.any? { |r| r.is_a?(Array) } ? results.flatten.uniq : results.uniq
     end
 
-    private def extract_created_files(messages)
-      messages
-        .select { |m| m[:role] == "tool" }
-        .map { |m| parse_write_result(m[:content]) }
-        .compact
-        .select { |r| r[:action] == "created" }
-        .map { |r| r[:file] }
-        .uniq
+    # Helper: extract tool names from tool_calls
+    private def extract_tool_names(tool_calls)
+      return [] unless tool_calls.is_a?(Array)
+      tool_calls.map { |tc| tc.dig(:function, :name) }
     end
 
-    private def extract_modified_files(messages)
-      messages
-        .select { |m| m[:role] == "tool" }
-        .map { |m| parse_write_result(m[:content]) }
-        .compact
-        .select { |r| r[:action] == "modified" }
-        .map { |r| r[:file] }
-        .uniq
+    # Helper: filter write results by action
+    private def filter_write_results(result, action)
+      result && result[:action] == action ? result[:file] : nil
+    end
+
+    # Helper: filter todo results by status
+    private def filter_todo_results(result, status)
+      result && result[:status] == status ? result[:task] : nil
+    end
+
+    # Helper: extract decision text from content (returns array of decisions or empty array)
+    private def extract_decision_text(content)
+      return [] unless content.is_a?(String)
+      return [] unless content.include?("decision") || content.include?("chose to") || content.include?("using")
+
+      sentences = content.split(/[.!?]/).select do |s|
+        s.include?("decision") || s.include?("chose") || s.include?("using") ||
+        s.include?("decided") || s.include?("will use") || s.include?("selected")
+      end
+      sentences.map(&:strip).map { |s| s[0..100] }
+    end
+
+    # Helper: find in-progress task
+    private def find_in_progress(messages)
+      return nil if messages.nil?
+
+      messages.reverse_each do |m|
+        if m[:role] == "tool"
+          content = m[:content].to_s
+          if content.include?("in progress") || content.include?("working on")
+            return content[/[Tt]ODO[:\s]+(.+)/, 1]&.strip || content[/[Ww]orking[Oo]n[:\s]+(.+)/, 1]&.strip
+          end
+        end
+      end
+      nil
+    end
+
+    # Helper: empty extraction data
+    private def empty_extraction_data
+      {
+        user_msgs: 0,
+        assistant_msgs: 0,
+        tool_msgs: 0,
+        tools_used: [],
+        files_created: [],
+        files_modified: [],
+        decisions: [],
+        completed_tasks: [],
+        in_progress: nil,
+        shell_results: []
+      }
     end
 
     private def parse_write_result(content)
@@ -1055,36 +1228,6 @@ module Clacky
       end
     end
 
-    private def extract_decisions(messages)
-      # Extract technical decisions from assistant messages
-      decisions = []
-      messages.each do |m|
-        if m[:role] == "assistant" && m[:content]
-          content = m[:content].to_s
-          # Look for decision patterns
-          if content.include?("decision") || content.include?("chose to") || content.include?("using")
-            # Extract sentences with key decision words
-            sentences = content.split(/[.!?]/).select do |s|
-              s.include?("decision") || s.include?("chose") || s.include?("using") ||
-              s.include?("decided") || s.include?("will use") || s.include?("selected")
-            end
-            decisions.concat(sentences.map(&:strip).map { |s| s[0..100] })
-          end
-        end
-      end
-      decisions.uniq.first(5)
-    end
-
-    private def extract_completed_tasks(messages)
-      messages
-        .select { |m| m[:role] == "tool" }
-        .map { |m| parse_todo_result(m[:content]) }
-        .compact
-        .select { |r| r[:status] == "completed" }
-        .map { |r| r[:task] }
-        .uniq
-    end
-
     private def parse_todo_result(content)
       return nil unless content.is_a?(String)
 
@@ -1095,27 +1238,6 @@ module Clacky
       else
         nil
       end
-    end
-
-    private def extract_in_progress(messages)
-      # Find the most recent unfinished task
-      messages.reverse_each do |m|
-        if m[:role] == "tool"
-          content = m[:content].to_s
-          if content.include?("in progress") || content.include?("working on")
-            return content[/[Tt]ODO[:\s]+(.+)/, 1]&.strip || content[/[Ww]orking[Oo]n[:\s]+(.+)/, 1]&.strip
-          end
-        end
-      end
-      nil
-    end
-
-    private def extract_shell_results(messages)
-      messages
-        .select { |m| m[:role] == "tool" }
-        .map { |m| parse_shell_result(m[:content]) }
-        .compact
-        .uniq
     end
 
     private def parse_shell_result(content)
@@ -1232,7 +1354,7 @@ module Clacky
       # with ALL their corresponding tool_results, maintaining the correct order.
       # This is critical for Bedrock Claude API which validates the tool_calls/tool_results pairing.
 
-      return [] if messages.empty?
+      return [] if messages.nil? || messages.empty?
 
       # Track which messages to include
       messages_to_include = Set.new
