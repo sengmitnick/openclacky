@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-02-01
+
+### Added
+- Complete skill system with loader and core functionality
+- Default skill support with auto-loading mechanism
+- Skills CLI command for skill management (`clacky skills list/show/create`)
+- Command suggestions UI component for better user guidance
+- Skip safety check option for safe_shell tool
+- UI2 component comprehensive test suite
+- Token output control for file_reader and shell tools
+- Grep max files limit configuration
+- File_reader tool index support
+- Web fetch content length limiting
+
+### Improved
+- File_reader line range handling logic
+- Message compression strategy (100 message compress)
+- Inline input wrap line handling
+- Cursor position calculation for multi-line inline input
+- Theme adjustments for better visual experience
+- Skill system integration with agent
+- Gem-release skill metadata standardization
+- Skill documentation with user experience summaries
+
+### Fixed
+- Skill commands now properly pass through to agent
+- Session restore data loading with -a or -c flags
+- Inline input cursor positioning for wrapped lines
+- Multi-line inline input cursor calculation
+
 ## [0.6.2] - 2026-01-30
 
 ### Added
