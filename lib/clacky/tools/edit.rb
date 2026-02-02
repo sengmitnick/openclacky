@@ -46,13 +46,22 @@ module Clacky
           content = File.read(path)
           original_content = content.dup
 
-          # Check if old_string exists
-          unless content.include?(old_string)
-            return { error: "String to replace not found in file" }
+          # Try exact match first
+          if content.include?(old_string)
+            actual_old_string = old_string
+            occurrences = content.scan(old_string).length
+          else
+            # Try smart whitespace normalization
+            match_result = try_smart_match(content, old_string)
+            
+            if match_result
+              actual_old_string = match_result[:matched_string]
+              occurrences = match_result[:occurrences]
+            else
+              # Provide helpful error with context
+              return build_helpful_error(content, old_string, path)
+            end
           end
-
-          # Count occurrences
-          occurrences = content.scan(old_string).length
 
           # If not replace_all and multiple occurrences, warn about ambiguity
           if !replace_all && occurrences > 1
@@ -64,9 +73,9 @@ module Clacky
 
           # Perform replacement
           if replace_all
-            content = content.gsub(old_string, new_string)
+            content = content.gsub(actual_old_string, new_string)
           else
-            content = content.sub(old_string, new_string)
+            content = content.sub(actual_old_string, new_string)
           end
 
           # Write modified content
@@ -82,6 +91,100 @@ module Clacky
         rescue StandardError => e
           { error: "Failed to edit file: #{e.message}" }
         end
+      end
+
+      private def try_smart_match(content, old_string)
+        # Normalize whitespace: convert all leading whitespace to single space for comparison
+        normalized_old = normalize_leading_whitespace(old_string)
+        
+        # Find all potential matches in content with normalized whitespace
+        matches = []
+        content_lines = content.lines
+        old_lines = old_string.lines
+        
+        return nil if old_lines.empty?
+        
+        # Scan through content to find matches
+        (0..content_lines.length - old_lines.length).each do |start_idx|
+          slice = content_lines[start_idx, old_lines.length]
+          next unless slice
+          
+          # Check if this slice matches when normalized
+          if lines_match_normalized?(slice, old_lines)
+            matched_string = slice.join
+            matches << { start: start_idx, matched_string: matched_string }
+          end
+        end
+        
+        return nil if matches.empty?
+        
+        # Return the first match and count total occurrences
+        {
+          matched_string: matches.first[:matched_string],
+          occurrences: matches.length
+        }
+      end
+
+      private def normalize_leading_whitespace(text)
+        # Normalize each line's leading whitespace
+        text.lines.map { |line| line.sub(/^\s+/, ' ') }.join
+      end
+
+      private def lines_match_normalized?(lines1, lines2)
+        return false unless lines1.length == lines2.length
+        
+        lines1.zip(lines2).all? do |line1, line2|
+          # Normalize leading whitespace and compare
+          norm1 = line1.sub(/^\s+/, ' ')
+          norm2 = line2.sub(/^\s+/, ' ')
+          norm1 == norm2
+        end
+      end
+
+      private def build_helpful_error(content, old_string, path)
+        # Find similar content to help debug
+        old_lines = old_string.lines
+        first_line_pattern = old_lines.first&.strip
+        
+        if first_line_pattern && !first_line_pattern.empty?
+          # Find lines that match the first line (ignoring whitespace)
+          content_lines = content.lines
+          similar_locations = []
+          
+          content_lines.each_with_index do |line, idx|
+            if line.strip == first_line_pattern
+              # Show context: 2 lines before and after
+              start_idx = [0, idx - 2].max
+              end_idx = [content_lines.length - 1, idx + old_lines.length + 2].min
+              context = content_lines[start_idx..end_idx].join
+              
+              similar_locations << {
+                line_number: idx + 1,
+                context: context
+              }
+            end
+          end
+          
+          if similar_locations.any?
+            context_preview = similar_locations.first[:context]
+            # Escape newlines for better display
+            context_display = context_preview.lines.first(5).map { |l| "  #{l}" }.join
+            
+            return {
+              error: "String to replace not found in file. The first line of old_string exists at line #{similar_locations.first[:line_number]}, " \
+                     "but the full multi-line string doesn't match. This is often caused by whitespace differences (tabs vs spaces). " \
+                     "\n\nContext around line #{similar_locations.first[:line_number]}:\n#{context_display}\n\n" \
+                     "TIP: Make sure to copy the exact whitespace characters from the file. Use file_reader to see the actual content."
+            }
+          end
+        end
+        
+        # Generic error if no similar content found
+        {
+          error: "String to replace not found in file '#{File.basename(path)}'. " \
+                 "Make sure old_string matches exactly (including all whitespace). " \
+                 "TIP: Use file_reader to view the exact content first, then copy the exact string including all spaces and tabs."
+        }
       end
 
       def format_call(args)

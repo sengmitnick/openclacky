@@ -655,7 +655,8 @@ module Clacky
             denied = true
             user_feedback = confirmation[:feedback]
             feedback = user_feedback if user_feedback
-            results << build_denied_result(call, user_feedback)
+            system_injected = confirmation[:system_injected]
+            results << build_denied_result(call, user_feedback, system_injected)
 
             # Auto-deny all remaining tools
             remaining_calls = tool_calls[(index + 1)..-1] || []
@@ -663,7 +664,7 @@ module Clacky
               reason = user_feedback && !user_feedback.empty? ?
                        user_feedback :
                        "Auto-denied due to user rejection of previous tool"
-              results << build_denied_result(remaining_call, reason)
+              results << build_denied_result(remaining_call, reason, system_injected)
             end
             break
           end
@@ -1446,9 +1447,8 @@ module Clacky
 
       # If preview detected an error, auto-deny and provide feedback
       if preview_error && preview_error[:error]
-        @ui&.show_warning("Tool call auto-denied due to preview error")
         feedback = build_preview_error_feedback(call[:name], preview_error)
-        return { approved: false, feedback: feedback }
+        return { approved: false, feedback: feedback, system_injected: true }
       end
 
       # Request confirmation via UI
@@ -1479,7 +1479,7 @@ module Clacky
     private def build_preview_error_feedback(tool_name, error_info)
       case tool_name
       when "edit"
-        "The edit operation will fail because the old_string was not found in the file. " \
+        "Tool edit denied: The edit operation will fail because the old_string was not found in the file. " \
         "Please use file_reader to read '#{error_info[:path]}' first, " \
         "find the correct string to replace, and try again with the exact string (including whitespace)."
       else
@@ -1607,9 +1607,7 @@ module Clacky
           file_size: file_content.length
         }
 
-        @ui&.show_file_error("String to replace not found in file")
-        @ui&.show_file_error("Looking for (first 100 chars):")
-        @ui&.show_file_error(old_string[0..100].inspect)
+        @ui&.show_file_error("Edit file error")
         return {
           error: "String to replace not found in file",
           path: path,
@@ -1653,21 +1651,25 @@ module Clacky
       }
     end
 
-    def build_denied_result(call, user_feedback = nil)
-      message = if user_feedback && !user_feedback.empty?
-                  "Tool use denied by user. User feedback: #{user_feedback}"
-                else
-                  "Tool use denied by user"
-                end
+    def build_denied_result(call, user_feedback = nil, system_injected = false)
+      if system_injected
+        # System-generated feedback (e.g., from preview errors)
+        tool_content = {
+          error: "Tool #{call[:name]} denied: #{user_feedback}",
+          system_injected: true
+        }
+      else
+        # User manually denied or provided feedback
+        message = if user_feedback && !user_feedback.empty?
+                    "Tool use denied by user. User feedback: #{user_feedback}"
+                  else
+                    "Tool use denied by user"
+                  end
 
-      # For edit tool, remind AI to use the exact same old_string from the previous tool call
-      tool_content = {
-        error: message,
-        user_feedback: user_feedback
-      }
-
-      if call[:name] == "edit"
-        tool_content[:hint] = "Keep old_string unchanged. Simply re-read the file if needed and retry with the exact same old_string."
+        tool_content = {
+          error: message,
+          user_feedback: user_feedback
+        }
       end
 
       {

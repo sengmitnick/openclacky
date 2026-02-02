@@ -99,6 +99,81 @@ RSpec.describe Clacky::Tools::Edit do
         expect(File.read(file_path)).to eq("  def hello\n    puts 'Ruby'\n  end")
       end
     end
+
+    context "smart whitespace matching" do
+      it "matches content with different leading whitespace (tabs vs spaces)" do
+        Dir.mktmpdir do |dir|
+          file_path = File.join(dir, "test.rb")
+          # File has 4 spaces
+          File.write(file_path, "def test\n    puts 'hello'\nend")
+
+          # AI provides tabs instead of spaces in old_string
+          result = tool.execute(
+            path: file_path,
+            old_string: "def test\n\tputs 'hello'\nend",
+            new_string: "def test\n    puts 'world'\nend"
+          )
+
+          expect(result[:error]).to be_nil
+          expect(result[:replacements]).to eq(1)
+          expect(File.read(file_path)).to eq("def test\n    puts 'world'\nend")
+        end
+      end
+
+      it "matches content when indentation uses mixed spaces/tabs" do
+        Dir.mktmpdir do |dir|
+          file_path = File.join(dir, "test.rb")
+          # File has 2 spaces for first level, 4 spaces for second level
+          File.write(file_path, "class Foo\n  def bar\n    'baz'\n  end\nend")
+
+          # AI provides tab instead of 4 spaces (but same logical indentation structure)
+          result = tool.execute(
+            path: file_path,
+            old_string: "  def bar\n\t'baz'\n  end\n",
+            new_string: "  def bar\n    'qux'\n  end\n"
+          )
+
+          expect(result[:error]).to be_nil
+          expect(result[:replacements]).to eq(1)
+          # Should preserve original indentation
+          expect(File.read(file_path)).to eq("class Foo\n  def bar\n    'qux'\n  end\nend")
+        end
+      end
+
+      it "provides helpful error when first line matches but full string doesn't" do
+        Dir.mktmpdir do |dir|
+          file_path = File.join(dir, "test.rb")
+          File.write(file_path, "def hello\n  puts 'world'\n  puts 'ruby'\nend")
+
+          result = tool.execute(
+            path: file_path,
+            old_string: "def hello\n  puts 'world'\n  puts 'python'",
+            new_string: "something else"
+          )
+
+          expect(result[:error]).to include("line 1")
+          expect(result[:error]).to include("whitespace differences")
+          expect(result[:error]).to include("TIP")
+        end
+      end
+
+      it "provides helpful error with context when string not found" do
+        Dir.mktmpdir do |dir|
+          file_path = File.join(dir, "test.rb")
+          File.write(file_path, "def hello\n  puts 'world'\nend")
+
+          result = tool.execute(
+            path: file_path,
+            old_string: "def goodbye\n  puts 'world'\nend",
+            new_string: "something else"
+          )
+
+          expect(result[:error]).to include("not found")
+          expect(result[:error]).to include("TIP")
+          expect(result[:error]).to include("file_reader")
+        end
+      end
+    end
   end
 
   describe "#to_function_definition" do
