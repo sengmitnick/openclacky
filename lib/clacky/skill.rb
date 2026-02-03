@@ -135,7 +135,7 @@ module Clacky
       skill_file = @directory.join("SKILL.md")
 
       unless skill_file.exist?
-        raise Clacky::Error, "SKILL.md not found in skill directory: #{@directory}"
+        raise Clacky::AgentError, "SKILL.md not found in skill directory: #{@directory}"
       end
 
       content = skill_file.read
@@ -160,7 +160,7 @@ module Clacky
       frontmatter_match = content.match(/^---\n(.*?)\n---/m)
 
       unless frontmatter_match
-        raise Clacky::Error, "Invalid frontmatter format in SKILL.md: missing closing ---"
+        raise Clacky::AgentError, "Invalid frontmatter format in SKILL.md: missing closing ---"
       end
 
       yaml_content = frontmatter_match[1]
@@ -185,22 +185,22 @@ module Clacky
       # Validate name if provided
       if @name
         unless @name.match?(/^[a-z0-9][a-z0-9-]*$/)
-          raise Clacky::Error,
+          raise Clacky::AgentError,
             "Invalid skill name '#{@name}'. Use lowercase letters, numbers, and hyphens only (max 64 chars)."
         end
         if @name.length > 64
-          raise Clacky::Error, "Skill name '#{@name}' exceeds 64 characters."
+          raise Clacky::AgentError, "Skill name '#{@name}' exceeds 64 characters."
         end
       end
 
       # Validate context
       if @context && @context != "fork"
-        raise Clacky::Error, "Invalid context '#{@context}'. Only 'fork' is supported."
+        raise Clacky::AgentError, "Invalid context '#{@context}'. Only 'fork' is supported."
       end
 
       # Validate allowed-tools format
       if @allowed_tools && !@allowed_tools.is_a?(Array)
-        raise Clacky::Error, "allowed-tools must be an array of tool names"
+        raise Clacky::AgentError, "allowed-tools must be an array of tool names"
       end
     end
 

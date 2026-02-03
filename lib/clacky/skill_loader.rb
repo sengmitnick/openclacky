@@ -167,7 +167,7 @@ module Clacky
     def create_skill(name, content, description = nil, location: :global)
       # Validate name
       unless name.match?(/^[a-z0-9][a-z0-9-]*$/)
-        raise Clacky::Error,
+        raise Clacky::AgentError,
           "Invalid skill name '#{name}'. Use lowercase letters, numbers, and hyphens only."
       end
 
@@ -178,7 +178,7 @@ module Clacky
       when :project
         Pathname.new(@working_dir).join(".clacky", "skills", name)
       else
-        raise Clacky::Error, "Unknown skill location: #{location}"
+        raise Clacky::AgentError, "Unknown skill location: #{location}"
       end
 
       # Create directory if it doesn't exist
@@ -270,7 +270,7 @@ module Clacky
       @loaded_from[skill.identifier] = source_type
 
       skill
-    rescue Clacky::Error => e
+    rescue Clacky::AgentError => e
       @errors << "Error loading skill '#{skill_name}' from #{skill_dir}: #{e.message}"
       nil
     rescue StandardError => e
