@@ -393,7 +393,7 @@ module Clacky
       def show_complete(iterations:, cost:, duration: nil, cache_stats: nil)
         # Update status back to 'idle' when task is complete
         update_sessionbar(status: 'idle')
-        
+
         # Clear user tip when agent stops working
         @input_area.clear_user_tip
         @layout.render_input
@@ -452,10 +452,10 @@ module Clacky
       def clear_progress
         # Calculate elapsed time before stopping
         elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
-        
+
         # Stop the progress thread
         stop_progress_thread
-        
+
         # Update the final progress line to gray (stopped state)
         if @progress_message && elapsed_time > 0
           final_output = @renderer.render_progress("#{@progress_message}… (#{elapsed_time}s)")
@@ -557,7 +557,7 @@ module Clacky
 
         # Create InlineInput with styled prompt
         inline_input = Components::InlineInput.new(
-          prompt: "  Press Enter/y to approve, 'n' to reject, Shift+Tab for all later, or type feedback: ",
+          prompt: "Press Enter/y to approve(Shift+Tab for all), 'n' to reject, or type feedback: ",
           default: nil
         )
         @inline_input = inline_input
