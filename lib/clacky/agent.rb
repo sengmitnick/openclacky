@@ -662,17 +662,20 @@ module Clacky
 
           confirmation = confirm_tool_use?(call)
           unless confirmation[:approved]
-            # Show denial warning with user feedback if provided
-            denial_message = "Tool #{call[:name]} denied"
-            if confirmation[:feedback] && !confirmation[:feedback].empty?
-              denial_message += ": #{confirmation[:feedback]}"
+            # Show denial warning only for user-initiated denials (not system-injected preview errors)
+            # Preview errors are already shown to user, no need to repeat
+            system_injected = confirmation[:system_injected]
+            unless system_injected
+              denial_message = "Tool #{call[:name]} denied"
+              if confirmation[:feedback] && !confirmation[:feedback].empty?
+                denial_message += ": #{confirmation[:feedback]}"
+              end
+              @ui&.show_warning(denial_message)
             end
-            @ui&.show_warning(denial_message)
 
             denied = true
             user_feedback = confirmation[:feedback]
             feedback = user_feedback if user_feedback
-            system_injected = confirmation[:system_injected]
             results << build_denied_result(call, user_feedback, system_injected)
 
             # Auto-deny all remaining tools
