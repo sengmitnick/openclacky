@@ -1043,9 +1043,9 @@ module Clacky
     end
 
     # Compression thresholds
-    COMPRESSION_THRESHOLD = 80_000  # Trigger compression when exceeding this (in tokens)
-    MESSAGE_COUNT_THRESHOLD = 20   # Trigger compression when exceeding this (in message count)
-    MAX_RECENT_MESSAGES = 5  # Keep this many recent message pairs intact
+    COMPRESSION_THRESHOLD = 150_000  # Trigger compression when exceeding this (in tokens)
+    MESSAGE_COUNT_THRESHOLD = 150   # Trigger compression when exceeding this (in message count)
+    MAX_RECENT_MESSAGES = 20  # Keep this many recent message pairs intact
     TARGET_COMPRESSED_TOKENS = 10_000  # Target size after compression
 
     def compress_messages_if_needed
@@ -1091,6 +1091,11 @@ module Clacky
       compression_message = @message_compressor.build_compression_message(@messages, recent_messages: recent_messages)
 
       return nil if compression_message.nil?
+
+      # Show compression start notification
+      @ui&.show_info(
+        "Message history compression starting (~#{total_tokens} tokens, #{@messages.length} messages) - Level #{@compression_level}"
+      )
 
       # Return compression context for agent to handle
       {
