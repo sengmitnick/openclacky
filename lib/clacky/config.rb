@@ -58,8 +58,8 @@ module Clacky
     def initialize(data = {})
       @api_key = data["api_key"]
       @model = data["model"]
-      @base_url = data["base_url"] || "https://api.openai.com"
-      @config_source = data["_config_source"] || "default"
+      @base_url = data["base_url"]
+      @config_source = data["_config_source"]
     end
 
     def self.load(config_file = CONFIG_FILE)
@@ -72,21 +72,21 @@ module Clacky
         config_source = nil
       end
 
-      # If api_key not found in config file, check ClaudeCode environment variables
-      if data["api_key"].nil? || data["api_key"].empty?
-        if ClaudeCodeEnv.configured?
-          data["api_key"] = ClaudeCodeEnv.api_key
-          data["base_url"] = ClaudeCodeEnv.base_url if data["base_url"].nil? || data["base_url"].empty?
-          # Use Claude default model if not specified in config file
-          data["model"] = CLAUDE_DEFAULT_MODEL if data["model"].nil? || data["model"].empty?
-          config_source = "claude_code"
-        elsif config_source.nil?
-          config_source = "default"
-        end
-      elsif config_source.nil?
-        # Config file existed but didn't have api_key
-        config_source = "default"
-      end
+      # # If api_key not found in config file, check ClaudeCode environment variables
+      # if data["api_key"].nil? || data["api_key"].empty?
+        # if ClaudeCodeEnv.configured?
+          # data["api_key"] = ClaudeCodeEnv.api_key
+          # data["base_url"] = ClaudeCodeEnv.base_url if data["base_url"].nil? || data["base_url"].empty?
+          # # Use Claude default model if not specified in config file
+          # data["model"] = CLAUDE_DEFAULT_MODEL if data["model"].nil? || data["model"].empty?
+          # config_source = "claude_code"
+        # elsif config_source.nil?
+          # config_source = "default"
+        # end
+      # elsif config_source.nil?
+        # # Config file existed but didn't have api_key
+        # config_source = "default"
+      # end
 
       data["_config_source"] = config_source
       new(data)
