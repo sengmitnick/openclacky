@@ -3,6 +3,7 @@
 require "thor"
 require "tty-prompt"
 require_relative "ui2"
+require_relative "json_ui_controller"
 
 module Clacky
   class CLI < Thor
@@ -48,6 +49,7 @@ module Clacky
     option :continue, type: :boolean, aliases: "-c", desc: "Continue most recent session"
     option :list, type: :boolean, aliases: "-l", desc: "List recent sessions"
     option :attach, type: :string, aliases: "-a", desc: "Attach to session by number or keyword"
+    option :json, type: :boolean, default: false, desc: "Output NDJSON to stdout (for scripting/piping)"
     option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
     def agent(message = nil)
       # Handle help option
@@ -97,7 +99,11 @@ module Clacky
       Dir.chdir(working_dir) if should_chdir
 
       begin
-        run_agent_with_ui2(agent, working_dir, agent_config, message, session_manager, client, is_session_load: is_session_load)
+        if options[:json]
+          run_agent_with_json(agent, working_dir, agent_config, message, session_manager, client)
+        else
+          run_agent_with_ui2(agent, working_dir, agent_config, message, session_manager, client, is_session_load: is_session_load)
+        end
       rescue StandardError => e
         # Save session on error
         if session_manager
@@ -288,7 +294,7 @@ module Clacky
 
       # Handle agent error/interrupt with cleanup
       def handle_agent_exception(ui_controller, agent, session_manager, exception)
-        ui_controller.stop_progress_thread
+        ui_controller.clear_progress
         ui_controller.set_idle_status
 
         if exception.is_a?(Clacky::AgentInterrupted)
@@ -299,6 +305,92 @@ module Clacky
           session_manager&.save(agent.to_session_data(status: :error, error_message: error_message))
           ui_controller.show_error("Error: #{exception.message}")
         end
+      end
+
+      # Run agent with JSON (NDJSON) output mode — persistent process.
+      # Reads JSON messages from stdin, writes NDJSON events to stdout.
+      # Stays alive until "/exit", {"type":"exit"}, or stdin EOF.
+      #
+      # Input protocol (one JSON per line on stdin):
+      #   {"type":"message","content":"..."}          — run agent with this message
+      #   {"type":"message","content":"...","images":["path"]} — with images
+      #   {"type":"exit"}                             — graceful shutdown
+      #   {"type":"confirmation","id":"conf_1","result":"yes"} — answer to request_confirmation
+      #
+      # If a bare string line is received it is treated as a message content.
+      def run_agent_with_json(agent, working_dir, agent_config, initial_message, session_manager, client)
+        json_ui = Clacky::JsonUIController.new
+        agent.instance_variable_set(:@ui, json_ui)
+
+        json_ui.emit("system", message: "Agent started", model: agent_config.model, working_dir: working_dir)
+
+        # Process initial CLI message if provided
+        if initial_message && !initial_message.strip.empty?
+          run_json_task(agent, json_ui, session_manager)  { agent.run(initial_message, images: []) }
+        end
+
+        # Persistent input loop — read JSON lines from stdin
+        while (line = $stdin.gets)
+          line = line.strip
+          next if line.empty?
+
+          # Parse input
+          input = begin
+                    JSON.parse(line)
+                  rescue JSON::ParserError
+                    # Treat bare string as a message
+                    { "type" => "message", "content" => line }
+                  end
+
+          type = input["type"] || "message"
+
+          case type
+          when "message"
+            content = input["content"].to_s.strip
+            if content.empty?
+              json_ui.emit("error", message: "Empty message content")
+              next
+            end
+
+            # Handle built-in commands
+            case content.downcase
+            when "/exit", "/quit"
+              break
+            when "/clear"
+              agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir)
+              agent.instance_variable_set(:@ui, json_ui)
+              json_ui.emit("info", message: "Session cleared. Starting fresh.")
+              next
+            end
+
+            images = input["images"] || []
+            run_json_task(agent, json_ui, session_manager) { agent.run(content, images: images) }
+          when "exit"
+            break
+          else
+            json_ui.emit("error", message: "Unknown input type: #{type}")
+          end
+        end
+
+        # Final session save and shutdown
+        if session_manager && agent.total_tasks > 0
+          session_manager.save(agent.to_session_data(status: :exited))
+        end
+        json_ui.emit("done", total_cost: agent.total_cost, total_tasks: agent.total_tasks)
+      end
+
+      # Execute a single agent task inside the JSON loop, with error handling.
+      def run_json_task(agent, json_ui, session_manager)
+        json_ui.set_working_status
+        yield
+        session_manager&.save(agent.to_session_data(status: :success))
+        json_ui.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+      rescue Clacky::AgentInterrupted
+        json_ui.emit("interrupted")
+      rescue => e
+        json_ui.emit("error", message: e.message)
+      ensure
+        json_ui.set_idle_status
       end
 
       # Run agent with UI2 split-screen interface
@@ -363,8 +455,8 @@ module Clacky
           if agent_thread&.alive?
             agent_thread.raise(Clacky::AgentInterrupted, "User interrupted")
           end
-          ui_controller.input_area.clear
-          ui_controller.input_area.set_tips("Press Ctrl+C again to exit.", type: :info)
+          ui_controller.clear_input
+          ui_controller.set_input_tips("Press Ctrl+C again to exit.", type: :info)
         end
 
         # Set up input handler

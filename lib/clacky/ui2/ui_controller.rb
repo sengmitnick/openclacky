@@ -7,11 +7,14 @@ require_relative "components/todo_area"
 require_relative "components/welcome_banner"
 require_relative "components/inline_input"
 require_relative "../thinking_verbs"
+require_relative "../ui_interface"
 
 module Clacky
   module UI2
     # UIController is the MVC controller layer that coordinates UI state and user interactions
     class UIController
+      include Clacky::UIInterface
+
       attr_reader :layout, :renderer, :running, :inline_input, :input_area
       attr_accessor :config
 
@@ -127,6 +130,18 @@ module Clacky
       def stop
         @running = false
         @layout.cleanup_screen
+      end
+
+      # Clear the input area
+      def clear_input
+        @input_area.clear
+      end
+
+      # Set input tips message
+      # @param message [String] Tip message to display
+      # @param type [Symbol] Tip type (:info, :warning, etc.)
+      def set_input_tips(message, type: :info)
+        @input_area.set_tips(message, type: type)
       end
 
       # Set callback for user input

@@ -918,6 +918,9 @@ module Clacky
       # Display token usage statistics for this iteration
       display_iteration_tokens(usage, iteration_cost)
 
+      # Update session bar cost in real-time (don't wait for agent.run to finish)
+      @ui&.update_sessionbar(cost: @total_cost)
+
       # Track cache usage statistics (global)
       @cache_stats[:total_requests] += 1
 
