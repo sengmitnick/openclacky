@@ -137,11 +137,11 @@ module Clacky
         test_callback = lambda do |test_config|
           # Create a temporary client with new config to test
           test_client = Clacky::Client.new(
-            test_config.api_key, 
-            base_url: test_config.base_url, 
+            test_config.api_key,
+            base_url: test_config.base_url,
             anthropic_format: test_config.anthropic_format?
           )
-          
+
           # Test connection
           test_client.test_connection(model: test_config.model)
         end
@@ -460,13 +460,18 @@ module Clacky
         end
 
         # Set up input handler
-        ui_controller.on_input do |input, images|
+        ui_controller.on_input do |input, images, display: nil|
           # Handle commands
           case input.downcase.strip
           when "/config"
             handle_config_command(ui_controller, client, agent_config)
             next
           when "/clear"
+            # Show user input first
+            ui_controller.append_output(display) if display
+            sleep 0.1
+            # Clear output area
+            ui_controller.layout.clear_output
             # Clear session by creating a new agent
             agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller)
             ui_controller.show_info("Session cleared. Starting fresh.")
@@ -479,6 +484,9 @@ module Clacky
             ui_controller.stop
             exit(0)
           when "/help"
+            # Show user input first
+            ui_controller.append_output(display) if display
+            sleep 0.1
             ui_controller.show_help
             next
           end
