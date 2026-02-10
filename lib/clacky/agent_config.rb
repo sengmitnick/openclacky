@@ -10,7 +10,7 @@ module Clacky
                   :enable_prompt_caching
 
     def initialize(options = {})
-      @model = options[:model] || "gpt-3.5-turbo"
+      @model = options[:model]
       @permission_mode = validate_permission_mode(options[:permission_mode])
       @max_tokens = options[:max_tokens] || 8192
       @verbose = options[:verbose] || false
