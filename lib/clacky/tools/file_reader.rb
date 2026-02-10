@@ -7,7 +7,7 @@ module Clacky
   module Tools
     class FileReader < Base
       self.tool_name = "file_reader"
-      self.tool_description = "Read contents of a file from the filesystem"
+      self.tool_description = "Read contents of a file from the filesystem."
       self.tool_category = "file_system"
       self.tool_parameters = {
         type: "object",
@@ -21,10 +21,6 @@ module Clacky
             description: "Maximum number of lines to read from start (default: 500)",
             default: 500
           },
-          keyword: {
-            type: "string",
-            description: "Search keyword and return matching lines with context (recommended for large files)"
-          },
           start_line: {
             type: "integer",
             description: "Start line number (1-indexed, e.g., 100 reads from line 100)"
@@ -36,16 +32,22 @@ module Clacky
         },
         required: ["path"]
       }
-      
+
 
 
       # Maximum text file size (1MB)
       MAX_TEXT_FILE_SIZE = 1 * 1024 * 1024
 
-      def execute(path:, max_lines: 500, keyword: nil, start_line: nil, end_line: nil)
+      # Maximum content size to return (~10,000 tokens = ~40,000 characters)
+      MAX_CONTENT_CHARS = 40_000
+
+      # Maximum characters per line (prevent single huge lines from bloating tokens)
+      MAX_LINE_CHARS = 1000
+
+      def execute(path:, max_lines: 500, start_line: nil, end_line: nil)
         # Expand ~ to home directory
         expanded_path = File.expand_path(path)
-        
+
         unless File.exist?(expanded_path)
           return {
             path: expanded_path,
@@ -82,11 +84,6 @@ module Clacky
               size_bytes: file_size,
               error: "Text file too large: #{format_file_size(file_size)} (max: #{format_file_size(MAX_TEXT_FILE_SIZE)}). Please use grep tool to search within this file instead."
             }
-          end
-
-          # Handle keyword search with context
-          if keyword && !keyword.empty?
-            return find_with_context(expanded_path, keyword)
           end
 
           # Read text file with optional line range
@@ -130,11 +127,30 @@ module Clacky
           end
 
           lines = all_lines[start_idx..end_idx] || []
-          truncated = total_lines > max_lines && !keyword
+
+          # Truncate individual lines that are too long
+          lines = lines.map do |line|
+            if line.length > MAX_LINE_CHARS
+              line[0...MAX_LINE_CHARS] + "... [Line truncated - #{line.length} chars]\n"
+            else
+              line
+            end
+          end
+
+          content = lines.join
+          truncated = end_idx < (total_lines - 1)
+
+          # Truncate total content if it exceeds maximum size
+          if content.length > MAX_CONTENT_CHARS
+            content = content[0...MAX_CONTENT_CHARS] +
+                     "\n\n[Content truncated - exceeded #{MAX_CONTENT_CHARS} characters (~10,000 tokens)]" +
+                     "\nUse start_line/end_line parameters to read specific sections, or grep tool to search for keywords."
+            truncated = true
+          end
 
           {
             path: expanded_path,
-            content: lines.join,
+            content: content,
             lines_read: lines.size,
             total_lines: total_lines,
             truncated: truncated,
@@ -171,7 +187,7 @@ module Clacky
         if result[:binary] || result['binary']
           format_type = result[:format] || result['format'] || 'unknown'
           size = result[:size_bytes] || result['size_bytes'] || 0
-          
+
           # Check if it has base64 data (LLM-compatible format)
           if result[:base64_data] || result['base64_data']
             size_warning = size > 5_000_000 ? " (WARNING: large file)" : ""
@@ -186,7 +202,7 @@ module Clacky
         truncated = result[:truncated] || result['truncated']
         "Read #{lines} lines#{truncated ? ' (truncated)' : ''}"
       end
-      
+
       # Format result for LLM - handles both text and binary (image/PDF) content
       # This method is called by the agent to format tool results before sending to LLM
       def format_result_for_llm(result)
@@ -194,12 +210,12 @@ module Clacky
         if result[:binary] && result[:base64_data]
           # Create a text description
           description = "File: #{result[:path]}\nType: #{result[:format]}\nSize: #{format_file_size(result[:size_bytes])}"
-          
+
           # Add size warning for large files
           if result[:size_bytes] > 5_000_000
             description += "\nWARNING: Large file (>5MB) - may consume significant tokens"
           end
-          
+
           # For images, return both description and image content
           if result[:mime_type]&.start_with?("image/")
             return {
@@ -212,7 +228,7 @@ module Clacky
               description: description
             }
           end
-          
+
           # For PDFs and other binary formats, just return metadata with base64
           return {
             type: "document",
@@ -224,54 +240,9 @@ module Clacky
             description: description
           }
         end
-        
+
         # For other cases, return the result as-is (agent will JSON.generate it)
         result
-      end
-
-      # Find lines matching keyword with context (5 lines before and after each match)
-      private def find_with_context(path, keyword)
-        context_lines_count = 5
-        all_lines = File.readlines(path)
-        total_lines = all_lines.size
-        matches = []
-
-        # Find all matching line indices (case-insensitive)
-        all_lines.each_with_index do |line, index|
-          if line.include?(keyword)
-            start_idx = [index - context_lines_count, 0].max
-            end_idx = [index + context_lines_count, total_lines - 1].min
-            matches << {
-              line_number: index + 1,
-              content: all_lines[start_idx..end_idx].join,
-              start_line: start_idx + 1,
-              end_line: end_idx + 1,
-              match_line: index + 1
-            }
-          end
-        end
-
-        if matches.empty?
-          {
-            path: path,
-            content: nil,
-            matches_count: 0,
-            error: "Keyword '#{keyword}' not found in file"
-          }
-        else
-          # Combine all matches with separator
-          combined_content = matches.map do |m|
-            "... Lines #{m[:start_line]}-#{m[:end_line]} (match at line #{m[:line_number]}):\n#{m[:content]}"
-          end.join("\n---\n")
-
-          {
-            path: path,
-            content: combined_content,
-            matches_count: matches.size,
-            keyword: keyword,
-            error: nil
-          }
-        end
       end
 
       private def handle_binary_file(path)
@@ -316,11 +287,11 @@ module Clacky
           }
         end
       end
-      
+
       private def detect_mime_type(path, data)
         Utils::FileProcessor.detect_mime_type(path, data)
       end
-      
+
       private def format_file_size(bytes)
         if bytes < 1024
           "#{bytes} bytes"
@@ -337,11 +308,11 @@ module Clacky
       private def list_directory_contents(path)
         begin
           entries = Dir.entries(path).reject { |entry| entry == "." || entry == ".." }
-          
+
           # Separate files and directories
           files = []
           directories = []
-          
+
           entries.each do |entry|
             full_path = File.join(path, entry)
             if File.directory?(full_path)
@@ -350,15 +321,15 @@ module Clacky
               files << entry
             end
           end
-          
+
           # Sort directories and files separately, then combine
           directories.sort!
           files.sort!
           all_entries = directories + files
-          
+
           # Format as a tree-like structure
           content = all_entries.map { |entry| "  #{entry}" }.join("\n")
-          
+
           {
             path: path,
             content: "Directory listing:\n#{content}",

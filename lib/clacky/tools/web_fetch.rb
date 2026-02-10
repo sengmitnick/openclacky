@@ -211,7 +211,8 @@ module Clacky
           compact[:content] = result[:content]
           compact[:truncated] = true
           compact[:temp_file] = result[:temp_file]
-          compact[:message] = "[Content truncated - full content saved to temp file. Use file_reader to read it if needed.]"
+          compact[:message] = "[Content truncated - full content saved to: #{result[:temp_file]}. " \
+                              "Use grep to search keywords, or file_reader with start_line/end_line to read sections.]"
         else
           compact[:content] = result[:content]
           compact[:truncated] = result[:truncated] || false

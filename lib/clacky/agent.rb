@@ -1546,7 +1546,16 @@ module Clacky
       end
 
       # Extract the messages in their original order
-      messages_to_include.to_a.sort.map { |idx| messages[idx] }
+      recent_messages = messages_to_include.to_a.sort.map { |idx| messages[idx] }
+
+      # Truncate large tool results to prevent token bloat
+      recent_messages.map do |msg|
+        if msg[:role] == "tool" && msg[:content].is_a?(String) && msg[:content].length > 2000
+          msg.merge(content: msg[:content][0..2000] + "...\n[Content truncated - exceeded 2000 characters]")
+        else
+          msg
+        end
+      end
     end
 
     def confirm_tool_use?(call)
