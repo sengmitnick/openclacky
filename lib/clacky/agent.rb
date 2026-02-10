@@ -316,6 +316,77 @@ module Clacky
       end
     end
 
+    # ===== Idle compression =====
+
+    # Trigger compression during idle time (user-friendly, interruptible)
+    # Returns true if compression was performed, false otherwise
+    def trigger_idle_compression
+      # Check if we should compress (force mode)
+      compression_context = compress_messages_if_needed(force: true)
+      return false if compression_context.nil?
+
+      @ui&.show_info("💤 Idle detected. Compressing conversation to optimize costs...")
+
+      # Insert compression message
+      @messages << compression_context[:compression_message]
+
+      begin
+        # Execute compression using shared LLM call logic
+        response = call_llm
+        handle_compression_response(response, compression_context)
+        true
+      rescue => e
+        @ui&.log("Idle compression failed: #{e.message}", level: :error)
+        # Remove the compression message we added
+        @messages.pop if @messages.last == compression_context[:compression_message]
+        false
+      end
+    end
+
+    # ===== LLM call helpers =====
+
+    # Execute LLM API call with progress indicator, retry logic, and cost tracking
+    # This method is shared by both normal think() and compression flows
+    # @return [Hash] API response with :content, :tool_calls, :usage, etc.
+    private def call_llm
+      @ui&.show_progress
+
+      tools_to_send = @tool_registry.all_definitions
+
+      # Retry logic for network failures
+      max_retries = 10
+      retry_delay = 5
+      retries = 0
+
+      begin
+        response = @client.send_messages_with_tools(
+          @messages,
+          model: @config.model,
+          tools: tools_to_send,
+          max_tokens: @config.max_tokens,
+          enable_caching: @config.enable_prompt_caching
+        )
+      rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
+        @ui&.clear_progress
+        retries += 1
+        if retries <= max_retries
+          @ui&.show_warning("Network failed: #{e.message}. Retry #{retries}/#{max_retries}...")
+          sleep retry_delay
+          retry
+        else
+          @ui&.show_error("Network failed after #{max_retries} retries: #{e.message}")
+          raise AgentError, "Network connection failed after #{max_retries} retries: #{e.message}"
+        end
+      ensure
+        @ui&.clear_progress
+      end
+
+      # Track cost for all LLM calls
+      track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
+
+      response
+    end
+
     # ===== Skill-related methods =====
 
     # Get the skill loader instance
@@ -566,56 +637,19 @@ module Clacky
         raise AgentError, "API key is not configured"
       end
 
-      @ui&.show_progress
-
       # Check if compression is needed
-      compression_context = compress_messages_if_needed
+      compression_context = compress_messages_if_needed(force: false)
 
       # If compression is triggered, insert compression message and handle it
       if compression_context
-        # Insert compression message into conversation
         @messages << compression_context[:compression_message]
-      end
-
-      # Always send tools definitions to allow multi-step tool calling
-      tools_to_send = @tool_registry.all_definitions
-
-      # Retry logic for network failures
-      max_retries = 10
-      retry_delay = 5
-      retries = 0
-
-      begin
-        response = @client.send_messages_with_tools(
-          @messages,
-          model: @config.model,
-          tools: tools_to_send,
-          max_tokens: @config.max_tokens,
-          enable_caching: @config.enable_prompt_caching
-        )
-      rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
-        retries += 1
-        if retries <= max_retries
-          @ui&.show_warning("Network failed: #{e.message}. Retry #{retries}/#{max_retries}...")
-          sleep retry_delay
-          retry
-        else
-          @ui&.show_error("Network failed after #{max_retries} retries: #{e.message}")
-          raise AgentError, "Network connection failed after #{max_retries} retries: #{e.message}"
-        end
-      end
-
-      # Clear progress indicator (change to gray and show final time)
-      @ui&.clear_progress
-
-      # If this was a compression call, rebuild message list with compressed content
-      if compression_context
+        response = call_llm
         handle_compression_response(response, compression_context)
-        # Return early - don't process as normal response
         return nil
       end
 
-      track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
+      # Normal LLM call
+      response = call_llm
 
       # Handle truncated responses (when max_tokens limit is reached)
       if response[:finish_reason] == "length"
@@ -1052,8 +1086,9 @@ module Clacky
     MESSAGE_COUNT_THRESHOLD = 150   # Trigger compression when exceeding this (in message count)
     MAX_RECENT_MESSAGES = 20  # Keep this many recent message pairs intact
     TARGET_COMPRESSED_TOKENS = 10_000  # Target size after compression
+    IDLE_COMPRESSION_MIN_MESSAGES = 3  # Minimum messages needed for idle compression
 
-    def compress_messages_if_needed
+    def compress_messages_if_needed(force: false)
       # Check if compression is enabled
       return nil unless @config.enable_compression
 
@@ -1062,20 +1097,28 @@ module Clacky
       total_tokens = token_counts[:total]
       message_count = @messages.length
 
-      # Check if we should trigger compression
-      # Either: token count exceeds threshold OR message count exceeds threshold
-      token_threshold_exceeded = total_tokens >= COMPRESSION_THRESHOLD
-      message_count_exceeded = message_count >= MESSAGE_COUNT_THRESHOLD
+      # Force compression (for idle compression) - use lower threshold
+      if force
+        # Only compress if we have more than keep_recent_messages + system message
+        return nil unless message_count > @config.keep_recent_messages + 1
+        # Also require minimum message count to make compression worthwhile
+        return nil unless message_count >= IDLE_COMPRESSION_MIN_MESSAGES
+      else
+        # Normal compression - check thresholds
+        # Either: token count exceeds threshold OR message count exceeds threshold
+        token_threshold_exceeded = total_tokens >= COMPRESSION_THRESHOLD
+        message_count_exceeded = message_count >= MESSAGE_COUNT_THRESHOLD
 
-      # Only compress if we exceed at least one threshold
-      return nil unless token_threshold_exceeded || message_count_exceeded
+        # Only compress if we exceed at least one threshold
+        return nil unless token_threshold_exceeded || message_count_exceeded
+      end
 
       # Calculate how much we need to reduce
       reduction_needed = total_tokens - TARGET_COMPRESSED_TOKENS
 
       # Don't compress if reduction is minimal (< 10% of current size)
-      # Only apply this check when triggered by token threshold
-      if token_threshold_exceeded && reduction_needed < (total_tokens * 0.1)
+      # Only apply this check when triggered by token threshold (not for force mode)
+      if !force && token_threshold_exceeded && reduction_needed < (total_tokens * 0.1)
         return nil
       end
 
@@ -1653,6 +1696,7 @@ module Clacky
       path = args[:path] || args[:file_path] || args['path'] || args['file_path']
       old_string = args[:old_string] || args['old_string'] || ""
       new_string = args[:new_string] || args['new_string'] || ""
+      replace_all = args[:replace_all] || args['replace_all'] || false
 
       @ui&.show_file_edit_preview(path)
 
@@ -1693,7 +1737,12 @@ module Clacky
         }
       end
 
-      new_content = file_content.sub(old_string, new_string)
+      # Use the same replace logic as the actual tool execution
+      new_content = if replace_all
+                      file_content.gsub(old_string, new_string)
+                    else
+                      file_content.sub(old_string, new_string)
+                    end
       @ui&.show_diff(file_content, new_content, max_lines: 50)
       nil  # No error
     end

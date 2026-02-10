@@ -57,6 +57,12 @@ module Clacky
 
     # Generate compression instruction message to be inserted into conversation
     # This enables cache reuse by using the same API call with tools
+    # 
+    # SIMPLIFIED APPROACH:
+    # - Don't duplicate conversation history in the compression message
+    # - LLM can already see all messages, just ask it to compress
+    # - Keep the instruction small for better cache efficiency
+    #
     # @param messages [Array<Hash>] Original conversation messages
     # @param recent_messages [Array<Hash>] Recent messages to keep uncompressed (optional)
     # @return [Hash] Compression instruction message to insert, or nil if nothing to compress
@@ -67,12 +73,12 @@ module Clacky
       # If nothing to compress, return nil
       return nil if messages_to_compress.empty?
 
-      # Build compression prompt with instruction and conversation
-      content = build_compression_content(messages_to_compress)
-      full_prompt = "#{COMPRESSION_PROMPT}\n\nConversation to compress:\n\n#{content}"
-
-      # Return the compression instruction as a user message with system_injected marker
-      { role: "user", content: full_prompt, system_injected: true }
+      # Simple compression instruction - LLM can see the history already
+      { 
+        role: "user", 
+        content: COMPRESSION_PROMPT,
+        system_injected: true
+      }
     end
 
     # Parse LLM response and rebuild message list with compression
@@ -97,36 +103,6 @@ module Clacky
     end
 
     private
-
-    def build_compression_content(messages)
-      # Format messages as readable text for compression
-      messages.map do |msg|
-        role = msg[:role]
-        content = format_content(msg[:content])
-        "[#{role.upcase}] #{content}"
-      end.join("\n\n")
-    end
-
-    def format_content(content)
-      return content if content.is_a?(String)
-
-      if content.is_a?(Array)
-        content.map do |block|
-          case block[:type]
-          when "text"
-            block[:text]
-          when "tool_use"
-            "TOOL: #{block[:name]}(#{block[:input]})"
-          when "tool_result"
-            "RESULT: #{block[:content]}"
-          else
-            block.to_s
-          end
-        end.join("\n")
-      else
-        content.to_s
-      end
-    end
 
     def parse_compressed_result(result)
       # Return the compressed result as a single assistant message

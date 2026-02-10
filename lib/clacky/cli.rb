@@ -14,7 +14,7 @@ module Clacky
     # Set agent as the default command
     default_task :agent
 
-    desc "agent [MESSAGE]", "Run agent in interactive mode with autonomous tool use (default)"
+    desc "agent", "Run agent in interactive mode with autonomous tool use (default)"
     long_desc <<-LONGDESC
       Run an AI agent in interactive mode that can autonomously use tools to complete tasks.
 
@@ -51,7 +51,7 @@ module Clacky
     option :attach, type: :string, aliases: "-a", desc: "Attach to session by number or keyword"
     option :json, type: :boolean, default: false, desc: "Output NDJSON to stdout (for scripting/piping)"
     option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
-    def agent(message = nil)
+    def agent
       # Handle help option
       if options[:help]
         invoke :help, ["agent"]
@@ -100,9 +100,9 @@ module Clacky
 
       begin
         if options[:json]
-          run_agent_with_json(agent, working_dir, agent_config, message, session_manager, client)
+          run_agent_with_json(agent, working_dir, agent_config, session_manager, client)
         else
-          run_agent_with_ui2(agent, working_dir, agent_config, message, session_manager, client, is_session_load: is_session_load)
+          run_agent_with_ui2(agent, working_dir, agent_config, session_manager, client, is_session_load: is_session_load)
         end
       rescue StandardError => e
         # Save session on error
@@ -318,16 +318,11 @@ module Clacky
       #   {"type":"confirmation","id":"conf_1","result":"yes"} — answer to request_confirmation
       #
       # If a bare string line is received it is treated as a message content.
-      def run_agent_with_json(agent, working_dir, agent_config, initial_message, session_manager, client)
+      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client)
         json_ui = Clacky::JsonUIController.new
         agent.instance_variable_set(:@ui, json_ui)
 
         json_ui.emit("system", message: "Agent started", model: agent_config.model, working_dir: working_dir)
-
-        # Process initial CLI message if provided
-        if initial_message && !initial_message.strip.empty?
-          run_json_task(agent, json_ui, session_manager)  { agent.run(initial_message, images: []) }
-        end
 
         # Persistent input loop — read JSON lines from stdin
         while (line = $stdin.gets)
@@ -394,7 +389,7 @@ module Clacky
       end
 
       # Run agent with UI2 split-screen interface
-      def run_agent_with_ui2(agent, working_dir, agent_config, initial_message = nil, session_manager = nil, client = nil, is_session_load: false)
+      def run_agent_with_ui2(agent, working_dir, agent_config, session_manager = nil, client = nil, is_session_load: false)
         # Validate theme
         theme_name = options[:theme] || "hacker"
         available_themes = UI2::ThemeManager.available_themes.map(&:to_s)
@@ -417,8 +412,10 @@ module Clacky
         # Set skill loader for command suggestions
         ui_controller.set_skill_loader(agent.skill_loader)
 
-        # Track agent thread state
+        # Track agent thread, idle compression thread, and idle timer
         agent_thread = nil
+        idle_compression_thread = nil
+        idle_timer_thread = nil
 
         # Set up mode toggle handler
         ui_controller.on_mode_toggle do |new_mode|
@@ -461,6 +458,19 @@ module Clacky
 
         # Set up input handler
         ui_controller.on_input do |input, images, display: nil|
+          # Kill idle timer thread if exists (user has new input)
+          if idle_timer_thread&.alive?
+            idle_timer_thread.kill
+            idle_timer_thread = nil
+          end
+
+          # Kill idle compression thread if running (user input interrupts compression)
+          if idle_compression_thread&.alive?
+            idle_compression_thread.kill
+            idle_compression_thread = nil
+            ui_controller.log("Idle compression interrupted by user input", level: :info)
+          end
+
           # Handle commands
           case input.downcase.strip
           when "/config"
@@ -497,6 +507,46 @@ module Clacky
             agent_thread.join(2) # Wait up to 2 seconds for graceful shutdown
           end
 
+          # Helper method to start idle timer after agent completes
+          start_idle_timer = lambda do
+            # Kill existing idle timer if any
+            if idle_timer_thread&.alive?
+              idle_timer_thread.kill
+              idle_timer_thread = nil
+            end
+
+            # Start idle timer - trigger compression after 60 seconds of inactivity
+            idle_timer_thread = Thread.new do
+              sleep 5 # Wait for 60 seconds (1 minute)
+
+              # After 60 seconds, check if agent is idle and trigger compression
+              if agent_thread.nil? || !agent_thread.alive?
+                idle_compression_thread = Thread.new do
+                  begin
+                    ui_controller.log("Starting idle compression...", level: :info)
+                    ui_controller.set_working_status
+                    success = agent.trigger_idle_compression
+
+                    if success
+                      ui_controller.log("Idle compression completed successfully", level: :info)
+                      # Update session bar after compression
+                      ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+                      # Save session after compression
+                      session_manager&.save(agent.to_session_data(status: :success))
+                    end
+                  rescue => e
+                    ui_controller.log("Idle compression error: #{e.message}", level: :error)
+                  ensure
+                    ui_controller.set_idle_status
+                    idle_compression_thread = nil
+                  end
+                end
+              end
+            rescue => e
+              # Silently handle timer errors (e.g., if killed)
+            end
+          end
+
           # Run agent in background thread
           agent_thread = Thread.new do
             begin
@@ -518,6 +568,8 @@ module Clacky
               handle_agent_exception(ui_controller, agent, session_manager, e)
             ensure
               agent_thread = nil
+              # Start idle timer after agent completes
+              start_idle_timer.call
             end
           end
         end
@@ -532,29 +584,13 @@ module Clacky
           ui_controller.initialize_and_show_banner
         end
 
-        # If there's an initial message, process it
-        if initial_message && !initial_message.strip.empty?
-          ui_controller.show_user_message(initial_message)
-
-          begin
-            # Set status to working when agent starts
-            ui_controller.set_working_status
-
-            result = agent.run(initial_message, images: [])
-
-            if session_manager
-              session_manager.save(agent.to_session_data(status: :success))
-            end
-
-            # Update session bar with agent's cumulative stats
-            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
-          rescue Clacky::AgentInterrupted, StandardError => e
-            handle_agent_exception(ui_controller, agent, session_manager, e)
-          end
-        end
-
         # Start input loop (blocks until exit)
         ui_controller.start_input_loop
+
+        # Cleanup: kill any running threads
+        idle_timer_thread&.kill
+        idle_compression_thread&.kill
+        agent_thread&.kill
 
         # Save final session state
         if session_manager && agent.total_tasks > 0
