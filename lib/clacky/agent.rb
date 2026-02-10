@@ -625,6 +625,10 @@ module Clacky
 
       # If compression is triggered, insert compression message and handle it
       if compression_context
+        # Show compression start notification
+        @ui&.show_info(
+          "Message history compression starting (~#{compression_context[:original_token_count]} tokens, #{compression_context[:original_message_count]} messages) - Level #{compression_context[:compression_level]}"
+        )
         @messages << compression_context[:compression_message]
         response = call_llm
         handle_compression_response(response, compression_context)
@@ -1128,11 +1132,6 @@ module Clacky
       compression_message = @message_compressor.build_compression_message(@messages, recent_messages: recent_messages)
 
       return nil if compression_message.nil?
-
-      # Show compression start notification
-      @ui&.show_info(
-        "Message history compression starting (~#{total_tokens} tokens, #{@messages.length} messages) - Level #{@compression_level}"
-      )
 
       # Return compression context for agent to handle
       {

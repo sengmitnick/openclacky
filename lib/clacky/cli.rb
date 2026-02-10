@@ -516,18 +516,16 @@ module Clacky
 
             # Start idle timer - trigger compression after 60 seconds of inactivity
             idle_timer_thread = Thread.new do
-              sleep 5 # Wait for 60 seconds (1 minute)
+              sleep 60 # Wait for 60 seconds (1 minute)
 
               # After 60 seconds, check if agent is idle and trigger compression
               if agent_thread.nil? || !agent_thread.alive?
                 idle_compression_thread = Thread.new do
                   begin
-                    ui_controller.log("Starting idle compression...", level: :info)
                     ui_controller.set_working_status
                     success = agent.trigger_idle_compression
 
                     if success
-                      ui_controller.log("Idle compression completed successfully", level: :info)
                       # Update session bar after compression
                       ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
                       # Save session after compression
