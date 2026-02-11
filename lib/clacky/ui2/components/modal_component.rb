@@ -17,20 +17,39 @@ module Clacky
           @height = 16
           @title = ""
           @fields = []
+          @choices = []
           @values = {}
+          @selected_index = 0
+          @mode = :form
         end
 
         # Configure and show the modal
         # @param title [String] Modal title
-        # @param fields [Array<Hash>] Field definitions
+        # @param fields [Array<Hash>] Field definitions (for form mode)
+        # @param choices [Array<Hash>] Choice definitions (for menu mode)
+        #   Example: [{ name: "Option 1", value: :opt1 }, { name: "---", disabled: true }]
         # @param validator [Proc, nil] Optional validation callback that receives values hash
         #                              Should return { success: true } or { success: false, error: "message" }
-        # @return [Hash, nil] Hash of field values, or nil if cancelled
-        def show(title:, fields:, validator: nil)
+        # @return [Hash, nil] Hash of field values or selected value, or nil if cancelled
+        def show(title:, fields: nil, choices: nil, validator: nil)
           @title = title
-          @fields = fields
+          @mode = choices ? :menu : :form
+          @fields = fields || []
+          @choices = choices || []
           @values = {}
           @error_message = nil
+          @selected_index = 0
+          
+          # For menu mode, find first non-disabled choice
+          if @mode == :menu
+            @selected_index = @choices.index { |c| !c[:disabled] } || 0
+          end
+
+          # Adjust height for menu mode
+          if @mode == :menu
+            visible_items = [@choices.length, 15].min
+            @height = visible_items + 4  # +4 for title, borders, and instructions
+          end
 
           # Get terminal size
           term_height, term_width = IO.console.winsize
@@ -40,60 +59,12 @@ module Clacky
           start_col = [(term_width - @width) / 2, 1].max
 
           begin
-            loop do
-              # Draw modal background and border
-              draw_modal(start_row, start_col)
-
-              # Draw error message if present
-              if @error_message
-                draw_error_message(start_row + @height - 5, start_col)
-              end
-
-              # Draw instructions
-              draw_buttons(start_row + @height - 3, start_col)
-              
-              # Collect input for each field
-              current_row = start_row + 3
-              @fields.each do |field|
-                value = collect_field_input(field, current_row, start_col)
-                if value == :cancelled
-                  print "\e[?25l"  # Hide cursor
-                  return nil  # User pressed Esc
-                end
-                @values[field[:name]] = value
-                current_row += 2
-              end
-
-              # All fields collected - validate if validator provided
-              if validator
-                # Show "Testing..." message
-                testing_row = start_row + @height - 5
-                testing_col = start_col + 3
-                print "\e[#{testing_row};#{testing_col}H\e[K"
-                print @pastel.cyan("⏳ Testing connection...")
-                STDOUT.flush
-                
-                validation_result = validator.call(@values)
-                
-                # Clear testing message
-                print "\e[#{testing_row};#{testing_col}H\e[K"
-                
-                if validation_result[:success]
-                  # Validation passed - hide cursor and return values
-                  print "\e[?25l"
-                  return @values
-                else
-                  # Validation failed - show error and loop again
-                  @error_message = validation_result[:error] || "Validation failed"
-                  # Clear modal to redraw with error
-                  clear_modal(start_row, start_col)
-                  sleep 1.5  # Give user time to read the error
-                end
-              else
-                # No validator - return immediately
-                print "\e[?25l"
-                return @values
-              end
+            if @mode == :menu
+              # Menu mode - show choices and handle selection
+              return show_menu_mode(start_row, start_col)
+            else
+              # Form mode - collect field inputs
+              return show_form_mode(start_row, start_col, validator)
             end
           ensure
             # Clear modal area
@@ -108,6 +79,112 @@ module Clacky
         end
 
         private
+
+        # Show menu mode
+        private def show_menu_mode(start_row, start_col)
+          loop do
+            # Draw menu
+            draw_modal(start_row, start_col)
+            draw_menu_choices(start_row + 2, start_col)
+            draw_menu_instructions(start_row + @height - 2, start_col)
+
+            # Read input
+            char = STDIN.getch
+
+            case char
+            when "\r", "\n"  # Enter - select current choice
+              selected = @choices[@selected_index]
+              return nil if selected.nil? || selected[:disabled]
+              print "\e[?25l"  # Hide cursor
+              return selected[:value]
+            when "\e"  # Escape sequence
+              seq = STDIN.read_nonblock(2) rescue ''
+              if seq.empty?
+                # Just Esc key - cancel
+                print "\e[?25l"
+                return nil
+              elsif seq == '[A'  # Up arrow
+                move_menu_selection(-1)
+              elsif seq == '[B'  # Down arrow
+                move_menu_selection(1)
+              end
+            when "\u0003"  # Ctrl+C
+              print "\e[?25l"
+              return nil
+            when 'k', 'K'  # Vim-style up
+              move_menu_selection(-1)
+            when 'j', 'J'  # Vim-style down
+              move_menu_selection(1)
+            when 'q', 'Q'  # Quit
+              print "\e[?25l"
+              return nil
+            end
+          end
+        end
+
+        # Show form mode
+        private def show_form_mode(start_row, start_col, validator)
+          loop do
+            # Draw modal background and border
+            draw_modal(start_row, start_col)
+
+            # Draw error message if present
+            if @error_message
+              draw_error_message(start_row + @height - 5, start_col)
+            end
+
+            # Draw instructions
+            draw_buttons(start_row + @height - 3, start_col)
+            
+            # Collect input for each field
+            current_row = start_row + 3
+            @fields.each do |field|
+              value = collect_field_input(field, current_row, start_col)
+              if value == :cancelled
+                print "\e[?25l"  # Hide cursor
+                return nil  # User pressed Esc
+              end
+              @values[field[:name]] = value
+              current_row += 2
+            end
+
+            # All fields collected - validate if validator provided
+            if validator
+              # Show "Testing..." message with debug info
+              testing_row = start_row + @height - 5
+              testing_col = start_col + 3
+              print "\e[#{testing_row};#{testing_col}H\e[K"
+              
+              # Show debug info about what we're testing
+              debug_info = "Testing: API=#{@values[:api_key]&.[](0..10)}... URL=#{@values[:base_url]} Model=#{@values[:model]}"
+              print @pastel.dim(debug_info)
+              print "\e[#{testing_row + 1};#{testing_col}H\e[K"
+              print @pastel.cyan("⏳ Testing connection...")
+              STDOUT.flush
+              
+              validation_result = validator.call(@values)
+              
+              # Clear testing messages
+              print "\e[#{testing_row};#{testing_col}H\e[K"
+              print "\e[#{testing_row + 1};#{testing_col}H\e[K"
+              
+              if validation_result[:success]
+                # Validation passed - hide cursor and return values
+                print "\e[?25l"
+                return @values
+              else
+                # Validation failed - show error and loop again to let user correct input
+                @error_message = validation_result[:error] || "Validation failed"
+                # Don't clear modal - just loop again to redraw with error message
+                # This prevents the modal from flickering
+              end
+            else
+              # No validator - return immediately
+              print "\e[?25l"
+              return @values
+            end
+          end
+        end
 
         # Draw the modal background and border
         private def draw_modal(start_row, start_col)
@@ -255,6 +332,72 @@ module Clacky
         private def clear_modal(start_row, start_col)
           @height.times do |i|
             print "\e[#{start_row + i};#{start_col}H#{' ' * @width}"
+          end
+        end
+
+        # Draw menu choices
+        private def draw_menu_choices(start_row, start_col)
+          @choices.each_with_index do |choice, index|
+            row = start_row + index
+            draw_menu_choice(choice, index, row, start_col)
+          end
+        end
+
+        # Draw a single menu choice
+        private def draw_menu_choice(choice, index, row, col)
+          is_selected = (index == @selected_index)
+          
+          # Calculate available width for text
+          text_width = @width - 6  # Account for borders, marker, and padding
+          
+          # Prepare choice text
+          choice_text = choice[:name] || ""
+          if choice_text.length > text_width
+            choice_text = choice_text[0..text_width-4] + "..."
+          end
+          
+          # Prepare marker and styling
+          if choice[:disabled]
+            # Disabled choice (like separator)
+            marker = "  "
+            text = @pastel.dim(choice_text)
+          elsif is_selected
+            marker = @pastel.bright_cyan("→ ")
+            text = @pastel.bright_white(choice_text)
+          else
+            marker = "  "
+            text = @pastel.white(choice_text)
+          end
+          
+          # Draw line
+          print "\e[#{row};#{col}H"
+          print @pastel.cyan("│") + marker + text
+          
+          # Pad to width
+          used_length = choice_text.length + 2  # marker is 2 chars
+          padding_needed = @width - used_length - 2  # -2 for borders
+          print " " * padding_needed + @pastel.cyan("│")
+        end
+
+        # Draw menu instructions
+        private def draw_menu_instructions(row, col)
+          instructions = "↑↓/jk: Navigate • Enter: Select • Esc/q: Cancel"
+          padding = (@width - instructions.length - 2) / 2
+          remaining = @width - padding - instructions.length - 2
+          
+          print "\e[#{row};#{col}H"
+          border_line = @pastel.cyan("└" + "─" * padding)
+          instr_part = @pastel.dim(instructions)
+          border_rest = @pastel.cyan("─" * remaining + "┘")
+          print border_line + instr_part + border_rest
+        end
+
+        # Move menu selection up or down
+        private def move_menu_selection(direction)
+          loop do
+            @selected_index = (@selected_index + direction) % @choices.length
+            # Skip disabled choices
+            break unless @choices[@selected_index][:disabled]
           end
         end
       end
