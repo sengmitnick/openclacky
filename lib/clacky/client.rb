@@ -54,7 +54,11 @@ module Clacky
         end
         handle_test_response(response)
       end
+    rescue Faraday::Error => e
+      # Network or connection errors
+      { success: false, error: "Connection error: #{e.message}" }
     rescue => e
+      # Other errors
       { success: false, error: e.message }
     end
 
@@ -752,6 +756,11 @@ module Clacky
 
     # Extract the most meaningful error message from API response
     private def extract_error_message(error_body, raw_body)
+      # Check if response is HTML (indicates wrong endpoint or server error)
+      if raw_body.is_a?(String) && raw_body.strip.start_with?('<!DOCTYPE', '<html')
+        return "Invalid API endpoint or server error (received HTML instead of JSON)"
+      end
+
       return raw_body unless error_body.is_a?(Hash)
 
       # Priority order for error messages:
@@ -759,7 +768,7 @@ module Clacky
       # 2. error.message (Anthropic format)
       # 3. message
       # 4. error (string)
-      # 5. raw body
+      # 5. raw body (truncated if too long)
       if error_body["upstreamMessage"] && !error_body["upstreamMessage"].empty?
         error_body["upstreamMessage"]
       elsif error_body.dig("error", "message")
@@ -769,7 +778,8 @@ module Clacky
       elsif error_body["error"].is_a?(String)
         error_body["error"]
       else
-        raw_body
+        # Truncate raw body if too long
+        raw_body.is_a?(String) && raw_body.length > 200 ? "#{raw_body[0..200]}..." : raw_body
       end
     end
 

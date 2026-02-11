@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "clacky/version"
-require_relative "clacky/config"
 require_relative "clacky/client"
 require_relative "clacky/message_compressor"
 require_relative "clacky/skill"
