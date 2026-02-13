@@ -29,14 +29,42 @@ module Clacky
 
       private
 
-      # Simple JSON repair: complete brackets and quotes
+      # Simple JSON repair: complete brackets and quotes, and remove XML contamination
       def self.repair_json(json_str)
         result = json_str.strip
 
-        # Complete unclosed strings
+        # Step 1: Remove XML-style parameter tags that Claude might mix in
+        # Pattern 1: </parameter> closing tags - remove completely
+        result = result.gsub(/<\/parameter>/, '')
+        
+        # Pattern 2: <parameter name="key"> or <parameter name="key": opening tags -> convert to JSON key
+        # Example: \n<parameter name="end_line"> 330 -> , "end_line": 330
+        # Also handles: \n<parameter name="end_line": 330 -> , "end_line": 330
+        result = result.gsub(/<parameter\s+name="([^"]+)":\s*/) { |match| ", \"#{$1}\": " }
+        result = result.gsub(/<parameter\s+name="([^"]+)">/) { |match| ", \"#{$1}\":" }
+        
+        # Pattern 3: Remove any remaining XML-like tags
+        result = result.gsub(/<[^>]+>/, '')
+
+        # Step 2: Clean up newlines with commas
+        # Example: 315\n, "end_line" -> 315, "end_line"
+        result = result.gsub(/\n\s*,/, ',')
+        result = result.gsub(/,\s*\n/, ',')
+
+        # Step 3: Clean up formatting issues
+        # Remove multiple consecutive commas
+        result = result.gsub(/,+/, ',')
+        # Remove trailing commas before closing braces/brackets
+        result = result.gsub(/,\s*}/, '}')
+        result = result.gsub(/,\s*\]/, ']')
+        # Remove leading commas after opening braces/brackets
+        result = result.gsub(/\{\s*,/, '{')
+        result = result.gsub(/\[\s*,/, '[')
+
+        # Step 4: Complete unclosed strings
         result += '"' if result.count('"').odd?
 
-        # Complete unclosed braces
+        # Step 5: Complete unclosed braces
         depth = 0
         result.each_char { |c| depth += 1 if c == '{'; depth -= 1 if c == '}' }
         result += '}' * depth if depth > 0
