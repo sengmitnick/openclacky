@@ -173,7 +173,7 @@ module Clacky
       private def handle_time_machine_command(ui_controller, agent, session_manager)
         # Get task history from agent
         history = agent.get_task_history(limit: 10)
-        
+
         if history.empty?
           ui_controller.show_info("No task history available yet.")
           return
@@ -181,13 +181,13 @@ module Clacky
 
         # Show time machine menu
         selected_task_id = ui_controller.show_time_machine_menu(history)
-        
+
         # If user cancelled, return
         return if selected_task_id.nil?
 
         # Get current active task for comparison
         current_task_id = agent.instance_variable_get(:@active_task_id)
-        
+
         # Perform the switch
         begin
           if selected_task_id < current_task_id
@@ -545,11 +545,17 @@ module Clacky
 
           # Helper method to start idle timer after agent completes
           start_idle_timer = lambda do
+            # Cancel any existing idle timer first
+            if idle_timer_thread&.alive?
+              idle_timer_thread.kill
+              idle_timer_thread = nil
+            end
+
             # Start idle timer - trigger compression after 180 seconds of inactivity
             idle_timer_thread = Thread.new do
               ui_controller.log("Idle timer started, will trigger compression in 180 seconds", level: :debug)
               # Sleep outside of rescue block - if interrupted here, let it propagate and exit
-              sleep 60
+              sleep 180
               ui_controller.log("Idle timer sleep completed, starting compression", level: :debug)
 
               # After sleep completes, switch to current_task_thread for compression
