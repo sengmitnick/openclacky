@@ -17,9 +17,11 @@ module Clacky
       def trigger_idle_compression
         # Check if we should compress (force mode)
         compression_context = compress_messages_if_needed(force: true)
-        return false if compression_context.nil?
-
-        @ui&.show_info("💤 Idle detected. Compressing conversation to optimize costs...")
+        @ui&.show_info("Idle detected. Compressing conversation to optimize costs...")
+        if compression_context.nil?
+          @ui&.show_info("Idle skipped.")
+          return false
+        end
 
         # Insert compression message
         @messages << compression_context[:compression_message]
