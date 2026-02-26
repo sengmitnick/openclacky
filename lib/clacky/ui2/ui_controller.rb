@@ -718,7 +718,8 @@ module Clacky
       def display_welcome_banner
         content = @welcome_banner.render_full(
           working_dir: @config[:working_dir],
-          mode: @config[:mode]
+          mode: @config[:mode],
+          width: @layout.screen.width
         )
         append_output(content)
 
@@ -743,7 +744,7 @@ module Clacky
         theme = ThemeManager.current_theme
 
         # Show logo banner only
-        append_output(@welcome_banner.render_logo)
+        append_output(@welcome_banner.render_logo(width: @layout.screen.width))
 
         # Show simple header
         append_output(theme.format_text("Recent conversation:", :info))

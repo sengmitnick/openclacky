@@ -26,26 +26,43 @@ module Clacky
           "[*] Type /help for more commands"
         ].freeze
 
+        # Minimum terminal width required for full logo display
+        MIN_WIDTH_FOR_LOGO = 90
+
         def initialize
           @pastel = Pastel.new
         end
 
-        # Render only the logo (ASCII art)
+        # Render only the logo (ASCII art or simple text based on terminal width)
+        # @param width [Integer] Terminal width
         # @return [String] Formatted logo only
-        def render_logo
+        def render_logo(width:)
           lines = []
           lines << ""
-          lines << @pastel.bright_green(LOGO)
+          
+          if width >= MIN_WIDTH_FOR_LOGO
+            lines << @pastel.bright_green(LOGO)
+          else
+            lines << @pastel.bright_green("Welcome, OpenClacky is here")
+          end
+          
           lines << ""
           lines.join("\n")
         end
 
         # Render startup banner
+        # @param width [Integer] Terminal width
         # @return [String] Formatted startup banner
-        def render_startup
+        def render_startup(width:)
           lines = []
           lines << ""
-          lines << @pastel.bright_green(LOGO)
+          
+          if width >= MIN_WIDTH_FOR_LOGO
+            lines << @pastel.bright_green(LOGO)
+          else
+            lines << @pastel.bright_green("Welcome, OpenClacky is here")
+          end
+          
           lines << ""
           lines << @pastel.bright_cyan(TAGLINE)
           lines << @pastel.dim("    Version #{Clacky::VERSION}")
@@ -80,9 +97,10 @@ module Clacky
         # Render full welcome (startup + agent info)
         # @param working_dir [String] Working directory
         # @param mode [String] Permission mode
+        # @param width [Integer] Terminal width
         # @return [String] Full welcome content
-        def render_full(working_dir:, mode:)
-          render_startup + render_agent_welcome(
+        def render_full(working_dir:, mode:, width:)
+          render_startup(width: width) + render_agent_welcome(
             working_dir: working_dir,
             mode: mode
           )
