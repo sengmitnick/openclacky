@@ -154,14 +154,10 @@ module Clacky
 
             # All fields collected - validate if validator provided
             if validator
-              # Show "Testing..." message with debug info
+              # Show "Testing..." message
               testing_row = start_row + @height - 5
               testing_col = start_col + 3
               print "\e[#{testing_row};#{testing_col}H\e[K"
-              
-              # Show debug info about what we're testing
-              debug_info = "Testing: API=#{@values[:api_key]&.[](0..10)}... URL=#{@values[:base_url]} Model=#{@values[:model]}"
-              print @pastel.dim(debug_info)
               print "\e[#{testing_row + 1};#{testing_col}H\e[K"
               print @pastel.cyan("⏳ Testing connection...")
               STDOUT.flush
@@ -171,17 +167,6 @@ module Clacky
               # Clear testing messages
               print "\e[#{testing_row};#{testing_col}H\e[K"
               print "\e[#{testing_row + 1};#{testing_col}H\e[K"
-              
-              if validation_result[:success]
-                # Validation passed - hide cursor and return values
-                print "\e[?25l"
-                return @values
-              else
-                # Validation failed - show error and loop again to let user correct input
-                @error_message = validation_result[:error] || "Validation failed"
-                # Don't clear modal - just loop again to redraw with error message
-                # This prevents the modal from flickering
-              end
             else
               # No validator - return immediately
               print "\e[?25l"
