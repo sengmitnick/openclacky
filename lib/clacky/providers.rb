@@ -15,8 +15,8 @@ module Clacky
         "name" => "Anthropic (Claude)",
         "base_url" => "https://api.anthropic.com",
         "api" => "anthropic-messages",
-        "default_model" => "claude-sonnet-4-6",
-        "models" => ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4"]
+        "default_model" => "claude-sonnet-4.6",
+        "models" => ["claude-opus-4-6", "claude-sonnet-4.6", "claude-haiku-4"]
       }.freeze,
 
       "openrouter" => {
@@ -29,10 +29,10 @@ module Clacky
 
       "minimax" => {
         "name" => "Minimax",
-        "base_url" => "https://api.minimax.chat/v1",
+        "base_url" => "https://api.minimaxi.com/v1",
         "api" => "openai-completions",
-        "default_model" => "MiniMax-Text-01",
-        "models" => ["MiniMax-Text-01", "MiniMax-M2"]
+        "default_model" => "MiniMax-M2.5",
+        "models" => ["MiniMax-M2.1", "MiniMax-M2.5"]
       }.freeze,
 
       "kimi" => {
