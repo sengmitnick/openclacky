@@ -42,6 +42,17 @@ detect_os() {
         *)          OS=Unknown;;
     esac
     print_info "Detected OS: $OS"
+    
+    # Detect Linux distribution
+    if [ "$OS" = "Linux" ]; then
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            DISTRO=$ID
+            print_info "Detected Linux distribution: $DISTRO"
+        else
+            DISTRO=unknown
+        fi
+    fi
 }
 
 # Check if command exists
@@ -95,42 +106,226 @@ install_via_gem() {
     fi
 }
 
+# Install dependencies and Ruby on macOS
+install_macos_dependencies() {
+    print_step "Installing macOS dependencies and Ruby..."
+    echo ""
+
+    # Install Xcode Command Line Tools
+    print_info "Installing Xcode Command Line Tools..."
+    if ! xcode-select -p &>/dev/null; then
+        xcode-select --install
+        print_warning "Please complete Xcode Command Line Tools installation and run this script again."
+        exit 1
+    else
+        print_success "Xcode Command Line Tools already installed"
+    fi
+
+    # Install Homebrew
+    print_info "Checking Homebrew installation..."
+    if ! command_exists brew; then
+        print_info "Installing Homebrew..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        
+        # Add Homebrew to PATH
+        echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
+        export PATH="/opt/homebrew/bin:$PATH"
+        
+        print_success "Homebrew installed successfully"
+    else
+        print_success "Homebrew already installed"
+    fi
+
+    # Install build dependencies
+    print_info "Installing build dependencies..."
+    brew install openssl@3 libyaml gmp rust
+    print_success "Build dependencies installed"
+
+    # Install mise for Ruby version management
+    print_info "Installing mise..."
+    if ! command_exists mise; then
+        curl https://mise.run | sh
+        
+        # Add mise to shell
+        if [ -f ~/.zshrc ]; then
+            echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.zshrc
+        fi
+        if [ -f ~/.bash_profile ]; then
+            echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bash_profile
+        fi
+        
+        export PATH="$HOME/.local/bin:$PATH"
+        eval "$(~/.local/bin/mise activate bash)"
+        
+        print_success "mise installed successfully"
+    else
+        print_success "mise already installed"
+    fi
+
+    # Install Ruby 3 via mise
+    print_info "Installing Ruby 3 via mise..."
+    ~/.local/bin/mise use -g ruby@3
+    
+    # Reload mise
+    eval "$(~/.local/bin/mise activate bash)"
+    
+    print_success "Ruby 3 installed successfully"
+    
+    # Verify Ruby installation
+    if check_ruby; then
+        return 0
+    else
+        print_error "Ruby installation verification failed"
+        return 1
+    fi
+}
+
+# Install dependencies and Ruby on Ubuntu/Debian
+install_ubuntu_dependencies() {
+    print_step "Installing Ubuntu dependencies and Ruby..."
+    echo ""
+
+    # Update package list
+    print_info "Updating package list..."
+    sudo apt update
+    print_success "Package list updated"
+
+    # Install build dependencies
+    print_info "Installing build dependencies..."
+    sudo apt install -y build-essential rustc libssl-dev libyaml-dev zlib1g-dev libgmp-dev git
+    print_success "Build dependencies installed"
+
+    # Install mise for Ruby version management
+    print_info "Installing mise..."
+    if ! command_exists mise; then
+        curl https://mise.run | sh
+        
+        # Add mise to shell
+        if [ -f ~/.bashrc ]; then
+            echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+        fi
+        
+        export PATH="$HOME/.local/bin:$PATH"
+        eval "$(~/.local/bin/mise activate bash)"
+        
+        print_success "mise installed successfully"
+    else
+        print_success "mise already installed"
+    fi
+
+    # Install Ruby 3 via mise
+    print_info "Installing Ruby 3 via mise..."
+    ~/.local/bin/mise use -g ruby@3
+    
+    # Reload mise
+    eval "$(~/.local/bin/mise activate bash)"
+    
+    print_success "Ruby 3 installed successfully"
+    
+    # Verify Ruby installation
+    if check_ruby; then
+        return 0
+    else
+        print_error "Ruby installation verification failed"
+        return 1
+    fi
+}
+
 # Suggest Ruby installation
 suggest_ruby_installation() {
     print_step "Ruby Installation Options"
     echo ""
 
     if [ "$OS" = "macOS" ]; then
-        print_info "Option 1: Use rbenv (Recommended)"
-        echo "  brew install rbenv ruby-build"
-        echo "  rbenv install 3.3.0"
-        echo "  rbenv global 3.3.0"
+        print_info "Automatic Installation (Recommended)"
+        echo "  This script can automatically install Ruby and dependencies for you."
+        echo "  Uses mise - a fast, polyglot tool version manager."
         echo ""
-        print_info "Option 2: Install Ruby via Homebrew"
-        echo "  brew install ruby@3.3"
-        echo "  export PATH=\"/usr/local/opt/ruby@3.3/bin:\$PATH\""
+        read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            install_macos_dependencies
+            return $?
+        fi
+        echo ""
+        print_info "Manual Installation with mise:"
+        echo "  # Install Xcode Command Line Tools"
+        echo "  xcode-select --install"
+        echo ""
+        echo "  # Install Homebrew (if not installed)"
+        echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        echo ""
+        echo "  # Install dependencies"
+        echo "  brew install openssl@3 libyaml gmp rust"
+        echo ""
+        echo "  # Install mise"
+        echo "  curl https://mise.run | sh"
+        echo "  echo 'eval \"\$(~/.local/bin/mise activate bash)\"' >> ~/.zshrc"
+        echo ""
+        echo "  # Install Ruby 3"
+        echo "  mise use -g ruby@3"
 
     elif [ "$OS" = "Linux" ]; then
-        print_info "Option 1: Use rbenv"
-        echo "  curl -fsSL https://github.com/rbenv/rbenv-installer/raw/main/bin/rbenv-installer | bash"
-        echo "  rbenv install 3.3.0"
-        echo "  rbenv global 3.3.0"
+        if [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]; then
+            print_info "Automatic Installation (Recommended)"
+            echo "  This script can automatically install Ruby and dependencies for you."
+            echo "  Uses mise - a fast, polyglot tool version manager."
+            echo ""
+            read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                install_ubuntu_dependencies
+                return $?
+            fi
+            echo ""
+            print_info "Manual Installation with mise (Ubuntu/Debian):"
+            echo "  # Update and install dependencies"
+            echo "  sudo apt update"
+            echo "  sudo apt install -y build-essential rustc libssl-dev libyaml-dev zlib1g-dev libgmp-dev git"
+            echo ""
+            echo "  # Install mise"
+            echo "  curl https://mise.run | sh"
+            echo "  echo 'eval \"\$(~/.local/bin/mise activate bash)\"' >> ~/.bashrc"
+            echo ""
+            echo "  # Install Ruby 3"
+            echo "  mise use -g ruby@3"
+        else
+            print_info "Manual Installation with mise (Other Linux):"
+            echo "  # Install build dependencies (adjust for your distribution)"
+            echo "  # Fedora/RHEL:"
+            echo "  sudo dnf install -y gcc make openssl-devel libyaml-devel zlib-devel gmp-devel git rust"
+            echo ""
+            echo "  # Install mise"
+            echo "  curl https://mise.run | sh"
+            echo "  echo 'eval \"\$(~/.local/bin/mise activate bash)\"' >> ~/.bashrc"
+            echo ""
+            echo "  # Install Ruby 3"
+            echo "  mise use -g ruby@3"
+        fi
+    
+    elif [ "$OS" = "Windows" ]; then
+        print_info "Windows Subsystem for Linux (WSL) Installation (Recommended)"
+        echo "  OpenClacky requires a Unix-like environment. We recommend using WSL."
         echo ""
-        print_info "Option 2: Use RVM"
-        echo "  curl -sSL https://get.rvm.io | bash -s stable --ruby"
+        echo "  1. Open PowerShell or Windows Command Prompt in administrator mode"
+        echo "  2. Install WSL with Ubuntu 24.04:"
         echo ""
-        print_info "Option 3: Use system package manager"
-        echo "  # Ubuntu/Debian:"
-        echo "  sudo apt-get update"
-        echo "  sudo apt-get install ruby-full"
+        echo "     wsl --install --distribution Ubuntu-24.04"
         echo ""
-        echo "  # Fedora:"
-        echo "  sudo dnf install ruby ruby-devel"
+        echo "  3. Restart your computer if prompted"
+        echo "  4. Launch Ubuntu from the Start menu"
+        echo "  5. Run this installation script again inside Ubuntu:"
+        echo ""
+        echo "     curl -fsSL https://raw.githubusercontent.com/clacky-ai/open-clacky/main/scripts/install.sh | bash"
+        echo ""
+        print_info "Learn more about WSL: https://learn.microsoft.com/en-us/windows/wsl/install"
     fi
 
     echo ""
     print_info "After installing Ruby, run this script again or use:"
     echo "  gem install openclacky"
+    echo ""
+    print_info "Learn more about mise: https://mise.jdx.dev"
 }
 
 # Main installation logic
@@ -155,11 +350,23 @@ main() {
         fi
     fi
 
-    # Strategy 2: Suggest Ruby installation options
-    print_error "Could not install OpenClacky automatically"
-    echo ""
-    suggest_ruby_installation
-    echo ""
+    # Strategy 2: Install Ruby on macOS/Ubuntu or suggest options
+    if [ "$OS" = "macOS" ] || [ "$OS" = "Linux" ]; then
+        print_warning "Ruby not found or version too old"
+        echo ""
+        if suggest_ruby_installation; then
+            # Try installing via gem after Ruby installation
+            if install_via_gem; then
+                show_post_install_info
+                exit 0
+            fi
+        fi
+    else
+        print_error "Could not install OpenClacky automatically"
+        echo ""
+        suggest_ruby_installation
+        echo ""
+    fi
 
     print_info "For more information, visit: https://github.com/clacky-ai/open-clacky"
     exit 1
