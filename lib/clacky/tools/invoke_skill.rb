@@ -55,9 +55,13 @@ module Clacky
         else
           # Expand skill content inline
           expanded = skill.process_content(task)
+          
+          # Add skill directory path information for script execution
+          skill_dir_info = "\n\n---\n**Skill Directory:** `#{skill.directory}`\n\nWhen executing scripts from Supporting Files, use the full path:\n`#{skill.directory}/scripts/script_name`\n---\n"
+          
           {
             message: "Skill '#{skill_name}' content expanded",
-            content: expanded,
+            content: expanded + skill_dir_info,
             skill_type: "inline",
             note: "The expanded content has been added to the conversation. Continue following its instructions."
           }
