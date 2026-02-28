@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-03-05
+
+### Fixed
+- Tool errors now display in low-key style (same as tool result) to avoid alarming users for non-critical errors the agent can retry
+- Session list now shows last message instead of first message for better context
+- Shell tool uses login shell (`-l`) instead of interactive shell (`-i`) for proper environment variable loading
+
+### Improved
+- Shell tool now reliably loads user environment (PATH, rbenv, nvm, etc.) on every execution
+- Session list shows resume tip (`clacky -a <session_id>`) to help users continue previous sessions
+
+### More
+- Add GitHub Release creation step to gem-release skill
+- Remove debug logging from API client
+
 ## [0.7.4] - 2026-02-27
 
 ### Added
