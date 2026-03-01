@@ -679,30 +679,50 @@ module Clacky
       # Show fullscreen command output view
       def show_command_output
         return unless @progress_output_buffer
-        return if @layout.fullscreen_mode?  # Already in fullscreen, ignore
+        return if @layout.fullscreen_mode?
 
-        # Get lines from LimitStack
-        stdout_lines = @progress_output_buffer[:stdout_lines]&.to_a || []
-        stderr_lines = @progress_output_buffer[:stderr_lines]&.to_a || []
-        
+        lines = build_command_output_lines
+        @layout.enter_fullscreen(lines, hint: "Press Ctrl+O to return · Output updates in real-time")
+
+        # Start background thread to refresh fullscreen content in real-time
+        buffer_ref = @progress_output_buffer
+        @fullscreen_refresh_thread = Thread.new do
+          while @layout.fullscreen_mode?
+            sleep 0.3
+            break unless @layout.fullscreen_mode?
+
+            updated_lines = build_command_output_lines_from(buffer_ref)
+            @layout.refresh_fullscreen(updated_lines)
+          end
+        rescue StandardError
+          # Silently handle thread errors
+        end
+      end
+
+      private
+
+      # Build command output lines snapshot from the shared progress buffer
+      private def build_command_output_lines
+        build_command_output_lines_from(@progress_output_buffer)
+      end
+
+      # Build command output lines from a given buffer hash
+      # @param buffer [Hash, nil] Buffer with :stdout_lines and :stderr_lines keys
+      # @return [Array<String>] Lines to display
+      private def build_command_output_lines_from(buffer)
+        return ["(No output yet)"] unless buffer
+
+        stdout_lines = buffer[:stdout_lines]&.to_a || []
+        stderr_lines = buffer[:stderr_lines]&.to_a || []
+
         lines = stdout_lines.map(&:chomp)
-        
-        # Add stderr section if present
         unless stderr_lines.empty?
           lines << ""
           lines << "--- STDERR ---"
           lines += stderr_lines.map(&:chomp)
         end
-        
-        if lines.empty?
-          lines = ["(No output yet)"]
-        end
-
-        # Enter fullscreen mode to display command output
-        @layout.enter_fullscreen(lines, hint: "Press Ctrl+O to return · Output updates in real-time")
+        lines.empty? ? ["(No output yet)"] : lines
       end
-
-      private
 
       # Format tool call for display
       # @param name [String] Tool name
@@ -824,7 +844,12 @@ module Clacky
         # If in fullscreen mode, only handle Ctrl+O to exit
         if @layout.fullscreen_mode?
           if key == :ctrl_o
+            # Kill the real-time refresh thread before exiting fullscreen
+            @fullscreen_refresh_thread&.kill
+            @fullscreen_refresh_thread = nil
             @layout.exit_fullscreen
+            # Restore main screen content after returning from alternate buffer
+            @layout.rerender_all
           end
           return
         end

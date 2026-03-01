@@ -256,6 +256,9 @@ module Clacky
       # @param old_line_count [Integer] Number of lines currently occupied (for clearing)
       def update_last_line(content, old_line_count = 1)
         @render_mutex.synchronize do
+          # Fullscreen owns the alternate screen; skip main-screen updates
+          return if @fullscreen_mode
+
           return if @output_row == 0  # No output yet
 
           # Calculate start row (last N lines)
@@ -309,6 +312,9 @@ module Clacky
       # @param line_count [Integer] Number of lines to remove (default: 1)
       def remove_last_line(line_count = 1)
         @render_mutex.synchronize do
+          # Fullscreen owns the alternate screen; skip main-screen updates
+          return if @fullscreen_mode
+
           return if @output_row == 0  # No output to remove
 
           # Calculate start row for removal
@@ -388,8 +394,11 @@ module Clacky
       # Handles scrolling when reaching fixed area
       # @param line [String] Single line to write (should not contain newlines)
       def write_output_line(line)
-        # Add to buffer for potential re-rendering
+        # Add to buffer so content is available when returning from fullscreen
         @output_buffer << line
+
+        # Fullscreen owns the alternate screen; skip rendering to avoid corruption
+        return if @fullscreen_mode
 
         # Calculate where fixed area starts (this is where output area ends)
         max_output_row = fixed_area_start_row
@@ -526,6 +535,9 @@ module Clacky
         # The InlineInput is rendered inline with output
         return if input_area.paused?
 
+        # Do not corrupt the alternate screen while in fullscreen mode
+        return if @fullscreen_mode
+
         current_fixed_height = fixed_area_height
         start_row = fixed_area_start_row
         gap_row = start_row
@@ -589,36 +601,86 @@ module Clacky
       # @param lines [Array<String>] Lines to display
       # @param hint [String] Hint message at bottom
       def enter_fullscreen(lines, hint: "Press Ctrl+O to return")
-        return if @fullscreen_mode
+        @render_mutex.synchronize do
+          return if @fullscreen_mode
 
-        @fullscreen_mode = true
+          @fullscreen_mode = true
+          @fullscreen_hint = hint
 
-        # Enter alternate screen buffer
-        print "\e[?1049h"
-        # Clear screen and move cursor to top
-        print "\e[2J\e[H"
-        $stdout.flush
+          # Enter alternate screen buffer and do a full clean:
+          #   \e[?1049h  - switch to alternate screen buffer (separate from primary)
+          #   \e[2J      - erase the entire visible screen
+          #   \e[H       - move cursor to top-left
+          # The alternate screen buffer has no scrollback history by design, so
+          # there is nothing to scroll up to once we clear the visible area.
+          print "\e[?1049h\e[2J\e[H"
+          $stdout.flush
 
-        # Show all lines with proper line endings (CR+LF)
-        lines.each do |line|
-          # Strip trailing newline and print with CR+LF
-          print line.chomp + "\r\n"
+          render_fullscreen_content(lines)
         end
+      end
 
-        # Show hint at bottom
-        print "\r\n"
-        print "\e[36m#{hint}\e[0m\r\n"
-        $stdout.flush
+      # Refresh fullscreen content in-place (for real-time updates without re-entering alt screen)
+      # @param lines [Array<String>] Updated lines to display
+      def refresh_fullscreen(lines)
+        @render_mutex.synchronize do
+          return unless @fullscreen_mode
+
+          # Move cursor to top-left and erase visible area, then redraw
+          print "\e[2J\e[H"
+          render_fullscreen_content(lines)
+        end
       end
 
       # Exit fullscreen mode and restore previous screen
       def exit_fullscreen
-        return unless @fullscreen_mode
+        @render_mutex.synchronize do
+          return unless @fullscreen_mode
 
-        @fullscreen_mode = false
+          @fullscreen_mode = false
+          @fullscreen_hint = nil
 
-        # Exit alternate screen buffer (automatically restores previous screen)
-        print "\e[?1049l"
+          # Exit alternate screen buffer (automatically restores previous screen content)
+          print "\e[?1049l"
+          $stdout.flush
+        end
+      end
+
+      # Render lines to the alternate screen (called by enter_fullscreen / refresh_fullscreen)
+      # Fills the entire screen: content at top, hint pinned at the very bottom row.
+      # This prevents the terminal from showing any blank scrollable area above the hint.
+      # @param lines [Array<String>] Lines to render
+      private def render_fullscreen_content(lines)
+        term_height = screen.height
+        term_width  = screen.width
+
+        # Reserve the bottom row for the hint bar
+        content_rows = term_height - 1
+
+        # Trim or pad lines to exactly fill the content area
+        display_lines = lines.first(content_rows)
+
+        # Print each content line, padded with spaces to full terminal width so
+        # no stale characters from a previous render remain on the right side.
+        display_lines.each do |line|
+          # Strip trailing whitespace then pad to terminal width (ignoring ANSI codes for width calc)
+          visible = line.chomp.gsub(/\e\[[0-9;]*m/, "")
+          padding = [term_width - visible.length, 0].max
+          print line.chomp + (" " * padding) + "\r\n"
+        end
+
+        # Fill any remaining content rows with blank lines so nothing from a
+        # previous render bleeds through when content shrinks.
+        blank_row = " " * term_width
+        (display_lines.length...content_rows).each do
+          print blank_row + "\r\n"
+        end
+
+        # Pin the hint bar at the very bottom row using absolute cursor positioning.
+        # \e[{row};{col}H moves to the given 1-based row/col.
+        hint_text = "\e[36m#{@fullscreen_hint}\e[0m"
+        print "\e[#{term_height};1H#{hint_text}\e[0K"
+
         $stdout.flush
       end
 
