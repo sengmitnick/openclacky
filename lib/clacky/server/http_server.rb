@@ -138,15 +138,12 @@ module Clacky
       end
 
       def api_create_session(req, res)
-        body = parse_json_body(req)
+        body        = parse_json_body(req)
         name        = body["name"]
-        working_dir = default_working_dir
+        working_dir = body["working_dir"]&.then { |d| File.expand_path(d) } || default_working_dir
 
-        # Validate working directory
-        unless Dir.exist?(working_dir)
-          json_response(res, 422, { error: "Directory does not exist: #{working_dir}" })
-          return
-        end
+        # Auto-create the working directory if it does not exist yet
+        FileUtils.mkdir_p(working_dir)
 
         session_id = build_session(name: name, working_dir: working_dir)
         json_response(res, 201, { session: @registry.list.find { |s| s[:id] == session_id } })
