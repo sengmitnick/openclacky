@@ -677,7 +677,14 @@ module Clacky
         # Suspend raw mode so less can take full control of the terminal
         @layout.screen.disable_raw_mode
 
-        system("less -R #{tmpfile.path}")
+        # --mouse       : enable mouse wheel scrolling inside less
+        # --wheel-lines : scroll 3 lines per wheel click (comfortable default)
+        # -R            : pass through ANSI colour codes
+        # Unset LESSOPEN/LESSCLOSE so less doesn't try to pre-process the file
+        system(
+          { "LESSOPEN" => nil, "LESSCLOSE" => nil },
+          "less", "--mouse", "--wheel-lines=3", "-R", tmpfile.path
+        )
 
         # Restore raw mode and repaint the main screen
         @layout.screen.enable_raw_mode

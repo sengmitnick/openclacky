@@ -21,7 +21,7 @@
       <div id="session-list"></div>
       <div id="tasks-section">
         <div class="sidebar-divider">
-          <span>Tasks</span>
+          <span>Scheduled Tasks</span>
         </div>
         <div id="task-list-items"></div>
       </div>
@@ -39,18 +39,12 @@
       <button id="btn-welcome-new">New Session</button>
     </div>
 
-    <!-- Task detail panel -->
+    <!-- Scheduled Tasks list panel (shown when user clicks "Scheduled Tasks") -->
     <div id="task-detail-panel" style="display:none">
       <header id="task-detail-header">
-        <span id="task-detail-title">Task</span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button id="btn-run-task" title="Run now">▶ Run</button>
-          <button id="btn-edit-task" title="Edit task">Edit</button>
-          <button id="btn-delete-task" title="Delete task">✕</button>
-        </div>
+        <span id="task-detail-title">Scheduled Tasks</span>
       </header>
-      <div id="task-detail-prompt"></div>
-      <div id="task-schedule-info"></div>
+      <div id="task-list-table"></div>
     </div>
 
     <!-- Chat panel -->
@@ -81,28 +75,6 @@
     </div>
   </div>
 </div>
-
-<!-- ── TASK EDIT MODAL ────────────────────────────────────────────────────── -->
-<div id="task-edit-overlay" class="modal-overlay" style="display:none">
-  <div class="modal-box lg">
-    <div class="modal-title">Edit Task</div>
-    <div class="form-group">
-      <label class="form-label">Task Name</label>
-      <input class="form-input" id="task-edit-name" disabled />
-    </div>
-    <div class="form-group">
-      <label class="form-label">Prompt</label>
-      <textarea class="form-textarea" id="task-edit-content"
-        placeholder="Write the prompt that the Agent will receive when this task runs…"></textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn-secondary" onclick="closeEditTaskModal()">Cancel</button>
-      <button class="btn-primary"   onclick="saveEditedTask()">Save</button>
-    </div>
-  </div>
-</div>
-
-
 
 <script src="/ws.js"></script>
 <script src="/sessions.js"></script>
