@@ -639,7 +639,9 @@ module Clacky
         session_id = @registry.create(name: name, working_dir: working_dir)
 
         client = @client_factory.call
-        agent  = Clacky::Agent.new(client, @agent_config.dup, working_dir: working_dir)
+        config = @agent_config.dup
+        config.permission_mode = :auto_approve
+        agent  = Clacky::Agent.new(client, config, working_dir: working_dir)
 
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
