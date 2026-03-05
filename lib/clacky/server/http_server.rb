@@ -33,14 +33,19 @@ module Clacky
           session_registry: @registry,
           session_builder:  method(:build_session)
         )
+        @skill_loader   = Clacky::SkillLoader.new
       end
 
       def start
+        # Override WEBrick's built-in signal traps via StartCallback,
+        # which fires after WEBrick sets its own INT/TERM handlers.
+        # This ensures Ctrl-C always exits immediately.
         server = WEBrick::HTTPServer.new(
           BindAddress:     @host,
           Port:            @port,
           Logger:          WEBrick::Log.new(File::NULL),
-          AccessLog:       []
+          AccessLog:       [],
+          StartCallback:   proc { trap("INT") { exit(0) }; trap("TERM") { exit(0) } }
         )
 
         # Mount API + WebSocket handler (takes priority).
@@ -68,10 +73,6 @@ module Clacky
           res["Cache-Control"] = "no-store"
           res["Pragma"]        = "no-cache"
         end
-
-        # Graceful shutdown on Ctrl-C
-        trap("INT")  { @scheduler.stop; server.shutdown }
-        trap("TERM") { @scheduler.stop; server.shutdown }
 
         puts "🌐 Clacky Web UI running at http://#{@host}:#{@port}"
         puts "   Press Ctrl-C to stop."
@@ -108,6 +109,7 @@ module Clacky
         when ["GET",    "/api/tasks"]         then api_list_tasks(res)
         when ["POST",   "/api/tasks"]         then api_create_task(req, res)
         when ["POST",   "/api/tasks/run"]     then api_run_task(req, res)
+        when ["GET",    "/api/skills"]         then api_list_skills(res)
         when ["GET",    "/api/config"]        then api_get_config(res)
         when ["POST",   "/api/config"]        then api_save_config(req, res)
         when ["POST",   "/api/config/test"]   then api_test_config(req, res)
@@ -125,6 +127,9 @@ module Clacky
           elsif method == "DELETE" && path.start_with?("/api/tasks/")
             name = URI.decode_www_form_component(path.sub("/api/tasks/", ""))
             api_delete_task(name, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/skills/[^/]+/toggle$})
+            name = URI.decode_www_form_component(path.sub("/api/skills/", "").sub("/toggle", ""))
+            api_toggle_skill(name, req, res)
           else
             not_found(res)
           end
@@ -261,6 +266,40 @@ module Clacky
         rescue => e
           json_response(res, 422, { error: e.message })
         end
+      end
+
+      # ── Skills API ────────────────────────────────────────────────────────────
+
+      # GET /api/skills — list all loaded skills with metadata
+      def api_list_skills(res)
+        @skill_loader.load_all  # refresh from disk on each request
+        skills = @skill_loader.all_skills.map do |skill|
+          source = @skill_loader.loaded_from[skill.identifier]
+          {
+            name:        skill.identifier,
+            description: skill.context_description,
+            source:      source,
+            enabled:     !skill.disabled?
+          }
+        end
+        json_response(res, 200, { skills: skills })
+      end
+
+      # PATCH /api/skills/:name/toggle — enable or disable a skill
+      # Body: { enabled: true/false }
+      def api_toggle_skill(name, req, res)
+        body    = parse_json_body(req)
+        enabled = body["enabled"]
+
+        if enabled.nil?
+          json_response(res, 422, { error: "enabled field required" })
+          return
+        end
+
+        skill = @skill_loader.toggle_skill(name, enabled: enabled)
+        json_response(res, 200, { ok: true, name: skill.identifier, enabled: !skill.disabled? })
+      rescue Clacky::AgentError => e
+        json_response(res, 422, { error: e.message })
       end
 
       # ── Config API ────────────────────────────────────────────────────────────
@@ -526,7 +565,6 @@ module Clacky
           broadcast_session_update(session_id)
           broadcast(session_id, { type: "error", session_id: session_id, message: e.message })
         end
-
         @registry.with_session(session_id) { |s| s[:thread] = thread }
       end
 
@@ -576,7 +614,6 @@ module Clacky
           broadcast_session_update(session_id)
           broadcast(session_id, { type: "error", session_id: session_id, message: e.message })
         end
-
         @registry.with_session(session_id) { |s| s[:thread] = thread }
       end
 

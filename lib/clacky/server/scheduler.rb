@@ -158,7 +158,7 @@ module Clacky
 
         $stdout.puts "[Clacky Scheduler] Firing task '#{task_name}' (session: #{session_id})"
 
-        # Run the agent in a background thread so the scheduler tick is non-blocking
+        # Run the agent in a background thread so the scheduler tick is non-blocking.
         Thread.new do
           session = @registry.get(session_id)
           agent   = nil
@@ -174,6 +174,7 @@ module Clacky
           @registry.update(session_id, status: :error, error: e.message)
           $stderr.puts "[Clacky Scheduler] Task '#{task_name}' failed: #{e.message}"
         end
+
       rescue => e
         $stderr.puts "[Clacky Scheduler] Failed to fire task '#{schedule["task"]}': #{e.message}"
       end
