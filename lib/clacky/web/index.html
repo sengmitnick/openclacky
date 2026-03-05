@@ -25,6 +25,12 @@
         </div>
         <div id="task-list-items"></div>
       </div>
+      <div id="skills-section">
+        <div class="sidebar-divider">
+          <span>Skills</span>
+        </div>
+        <div id="skill-list-items"></div>
+      </div>
     </div>
 
     <!-- Bottom nav -->
@@ -85,6 +91,31 @@
       </div>
     </div>
 
+    <!-- ── SKILLS PANEL ───────────────────────────────────────────────── -->
+    <div id="skills-panel" style="display:none">
+      <header id="skills-header">
+        <span>Skills</span>
+        <button id="btn-create-skill" title="Create a new skill">+ New Skill</button>
+      </header>
+      <div id="skills-body">
+        <!-- Tab bar -->
+        <div id="skills-tabs">
+          <button class="skills-tab active" data-tab="my-skills">My Skills</button>
+          <button class="skills-tab" data-tab="store">Store</button>
+        </div>
+
+        <!-- Tab: My Skills -->
+        <div id="skills-tab-my" class="skills-tab-content">
+          <div id="skills-list"></div>
+        </div>
+
+        <!-- Tab: Store -->
+        <div id="skills-tab-store" class="skills-tab-content" style="display:none">
+          <div id="skills-store-grid"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── SETTINGS PANEL ──────────────────────────────────────────────── -->
     <div id="settings-panel" style="display:none">
       <header id="settings-header">
@@ -121,6 +152,7 @@
 <script src="/ws.js"></script>
 <script src="/sessions.js"></script>
 <script src="/tasks.js"></script>
+<script src="/skills.js"></script>
 <script src="/settings.js"></script>
 <script src="/app.js"></script>
 </body>

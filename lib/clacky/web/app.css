@@ -779,6 +779,248 @@ body {
 .form-textarea:focus { outline: none; border-color: #58a6ff; }
 .form-hint { font-size: 11px; color: #8b949e; margin-top: 4px; }
 
+/* ── Skills Panel ────────────────────────────────────────────────────────── */
+#skills-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+#skills-header {
+  padding: 12px 20px;
+  border-bottom: 1px solid #30363d;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #161b22;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 15px;
+}
+#btn-create-skill {
+  padding: 5px 12px;
+  background: #238636;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#btn-create-skill:hover { background: #2ea043; }
+#skills-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px;
+  gap: 16px;
+}
+
+/* ── Skills Tabs ─────────────────────────────────────────────────────────── */
+#skills-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+}
+.skills-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+}
+.skills-tab:hover  { color: #e6edf3; }
+.skills-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+
+.skills-tab-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* ── My Skills list ──────────────────────────────────────────────────────── */
+#skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+}
+.skills-empty {
+  color: #8b949e;
+  font-size: 13px;
+  padding: 20px 0;
+  text-align: center;
+}
+
+/* ── Skill Card ──────────────────────────────────────────────────────────── */
+.skill-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 14px 16px;
+  transition: border-color .15s;
+}
+.skill-card:hover { border-color: #484f58; }
+.skill-card-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.skill-card-info { flex: 1; min-width: 0; }
+.skill-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.skill-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6edf3;
+}
+.skill-card-desc {
+  font-size: 12px;
+  color: #8b949e;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Skill Badges ────────────────────────────────────────────────────────── */
+.skill-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+.skill-badge-system {
+  background: #1f3a5f;
+  color: #79c0ff;
+  border: 1px solid #1d4070;
+}
+.skill-badge-custom {
+  background: #1f3024;
+  color: #56d364;
+  border: 1px solid #1c4028;
+}
+
+/* ── Toggle Switch ───────────────────────────────────────────────────────── */
+.skill-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.skill-toggle-disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.skill-toggle-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.skill-toggle-track {
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  background: #30363d;
+  border-radius: 10px;
+  transition: background .2s;
+  position: relative;
+}
+.skill-toggle-track::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  top: 3px;
+  left: 3px;
+  transition: left .2s;
+}
+.skill-toggle-input:checked + .skill-toggle-track {
+  background: #238636;
+}
+.skill-toggle-input:checked + .skill-toggle-track::after {
+  left: 19px;
+}
+
+/* ── Store Grid ──────────────────────────────────────────────────────────── */
+#skills-store-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+}
+.store-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  transition: border-color .15s;
+}
+.store-card:hover { border-color: #484f58; }
+.store-card-icon {
+  font-size: 28px;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d1117;
+  border-radius: 8px;
+}
+.store-card-body { flex: 1; min-width: 0; }
+.store-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6edf3;
+  margin-bottom: 4px;
+}
+.store-card-desc {
+  font-size: 12px;
+  color: #8b949e;
+  line-height: 1.5;
+}
+.store-card-actions { flex-shrink: 0; }
+.btn-store-install {
+  background: #238636;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.btn-store-install:hover { background: #2ea043; }
+.store-badge-installed {
+  font-size: 12px;
+  color: #56d364;
+  font-weight: 600;
+}
+
+/* ── Skills sidebar section ──────────────────────────────────────────────── */
+#skill-list-items { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
