@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-03-06
+
+### Added
+- Skills panel in web UI: list all skills, enable/disable with toggle, view skill details
+- Hash-based routing (`#session/:id`, `#tasks`, `#skills`, `#settings`) with deep-link and refresh support
+- REST API endpoints for skills management (`GET /api/skills`, `PATCH /api/skills/:name/toggle`)
+- `disabled?` helper on `Skill` model for quick enabled/disabled state checks
+
+### Improved
+- Centralized `Router` object in web UI — single source of truth for all panel switching and sidebar highlight state
+- Web UI frontend split further: `skills.js` extracted as standalone module
+- Ctrl-C in web server now exits immediately via `StartCallback` trap override
+- Skill enable/disable now writes `disable-model-invocation: false` (retains field) instead of deleting it
+
+### Fixed
+- Sidebar highlight for Tasks and Skills stuck active after navigating away
+- Router correctly restores last view on page refresh via hash URL
+
+### Changed
+- Removed `plan_only` permission mode from agent, CLI, and web UI
+
 ## [0.7.7] - 2026-03-04
 
 ### Added
