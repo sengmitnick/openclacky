@@ -43,6 +43,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "base64", "~> 0.3.0"
   spec.add_dependency "websocket-driver", "~> 0.7"
   spec.add_dependency "webrick", "~> 1.8"
+  spec.add_dependency "artii", "~> 2.1"
 
   # For more information and examples about making a new gem, check out our
   # guide at: https://bundler.io/guides/creating_gem.html

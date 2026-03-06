@@ -2,6 +2,7 @@ PATH
   remote: .
   specs:
     openclacky (0.7.9)
+      artii (~> 2.1)
       base64 (~> 0.3.0)
       diffy (~> 3.4)
       faraday (~> 2.0)
@@ -17,6 +18,7 @@ PATH
 GEM
   remote: https://rubygems.org/
   specs:
+    artii (2.1.2)
     ast (2.4.3)
     base64 (0.3.0)
     climate_control (1.2.0)
@@ -150,6 +152,7 @@ DEPENDENCIES
   rubocop (~> 1.21)
 
 CHECKSUMS
+  artii (2.1.2) sha256=15410369690634fccf801fd95ae9762c3b2b7254e17a07e77a069e5cd292bc49
   ast (2.4.3) sha256=954615157c1d6a382bc27d690d973195e79db7f55e9765ac7c481c60bdb4d383
   base64 (0.3.0) sha256=27337aeabad6ffae05c265c450490628ef3ebd4b67be58257393227588f5a97b
   climate_control (1.2.0) sha256=36b21896193fa8c8536fa1cd843a07cf8ddbd03aaba43665e26c53ec1bd70aa5

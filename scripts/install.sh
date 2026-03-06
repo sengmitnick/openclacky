@@ -4,6 +4,10 @@
 
 set -e
 
+# Brand configuration (populated by --brand-name / --command flags)
+BRAND_NAME=""
+BRAND_COMMAND=""
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -338,8 +342,81 @@ suggest_ruby_installation() {
     print_info "Learn more about mise: https://mise.jdx.dev"
 }
 
+# Parse command-line arguments.
+#
+# Supported flags:
+#   --brand-name=VALUE   Human-readable brand name (e.g. "JohnAI")
+#   --command=VALUE      CLI command to install as a wrapper (e.g. "johncli")
+#
+# Usage from install command:
+#   /bin/bash -c "$(curl -sSL .../install.sh)" -- --brand-name="JohnAI" --command="johncli"
+#
+# Note: bash -c passes positional args starting at $0, so real flags are in $@
+# when invoked with the `--` separator; they land in $1..$N of the script.
+parse_args() {
+    for arg in "$@"; do
+        case "$arg" in
+            --brand-name=*)
+                BRAND_NAME="${arg#--brand-name=}"
+                ;;
+            --command=*)
+                BRAND_COMMAND="${arg#--command=}"
+                ;;
+        esac
+    done
+}
+
+# Write brand configuration and install the wrapper command.
+#
+# Creates ~/.clacky/brand.yml with brand metadata and, if a custom command
+# name was requested, installs a thin wrapper script at ~/.local/bin/<command>
+# that simply delegates to openclacky.
+setup_brand() {
+    [ -z "$BRAND_NAME" ] && return 0
+
+    local clacky_dir="$HOME/.clacky"
+    local brand_file="$clacky_dir/brand.yml"
+    mkdir -p "$clacky_dir"
+
+    print_step "Configuring brand: $BRAND_NAME"
+
+    # Write brand.yml — minimal entry; license_key is filled in later via
+    # the CLI or WebUI activation flow.
+    cat > "$brand_file" <<YAML
+brand_name: "${BRAND_NAME}"
+brand_command: "${BRAND_COMMAND}"
+YAML
+
+    print_success "Brand configuration written to $brand_file"
+
+    # Install wrapper command if a custom command name was provided.
+    if [ -n "$BRAND_COMMAND" ]; then
+        local bin_dir="$HOME/.local/bin"
+        mkdir -p "$bin_dir"
+
+        local wrapper="$bin_dir/$BRAND_COMMAND"
+        cat > "$wrapper" <<WRAPPER
+#!/bin/sh
+exec openclacky "\$@"
+WRAPPER
+        chmod +x "$wrapper"
+        print_success "Wrapper command installed: $wrapper"
+
+        # Remind user to add ~/.local/bin to PATH if needed.
+        case ":$PATH:" in
+            *":$bin_dir:"*) ;;
+            *)
+                print_warning "Add the following to your shell profile so '$BRAND_COMMAND' is available:"
+                echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+                ;;
+        esac
+    fi
+}
+
 # Main installation logic
 main() {
+    parse_args "$@"
+
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║                                                           ║"
@@ -355,6 +432,7 @@ main() {
     # Strategy 1: Check Ruby and install via gem
     if check_ruby; then
         if install_via_gem; then
+            setup_brand
             show_post_install_info
             exit 0
         fi
@@ -367,6 +445,7 @@ main() {
         if suggest_ruby_installation; then
             # Try installing via gem after Ruby installation
             if install_via_gem; then
+                setup_brand
                 show_post_install_info
                 exit 0
             else
@@ -449,4 +528,4 @@ show_post_install_info() {
 }
 
 # Run main installation
-main
+main "$@"
