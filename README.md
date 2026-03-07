@@ -6,46 +6,67 @@
 [![Downloads](https://img.shields.io/gem/dt/openclacky?label=downloads&style=flat-square&color=brightgreen)](https://rubygems.org/gems/openclacky)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](LICENSE.txt)
 
-OpenClacky = Lovable + Supabase
+**From expertise to business — turn your professional knowledge into a monetizable OpenClaw Skill.**
 
-**OpenClacky** is a CLI tool for building full-stack web applications — no technical background required. We spent months crafting a **Rails for AI** full-stack architecture that is fully production-ready, with one-click deployment, isolated dev/production environments, and automatic backups.
-
-OpenClacky's goal is to deliver the best balance of **AI quality, AI cost, and AI speed**.
-
-## Quick start
-
-```bash
-$ openclacky
-```
-
-- `/config` — Set your API key, model, and base URL
-- `/new <project-name>` — Create a new project
-- Type your requirements and start building
+OpenClacky is the creator-side platform for the OpenClaw ecosystem. Package your methods and workflows into encrypted, white-labeled Skills that your clients install and use — under your name, your brand, your price.
 
 ## Why OpenClacky?
 
-|  | **Claude Code** | **Lovable + Supabase** | **OpenClacky** |
-|---|---|---|---|
-| **Target Users** | Professional developers | Non-technical users | Non-technical users |
-| **Tech Stack** | Any | React + Supabase | Rails (full-stack) |
-| **Full-Stack Integration** | ❌ DIY | ⚠️ Frontend/backend split | ✅ Unified full-stack |
-| **Production-Ready** | ❌ Manual setup | ⚠️ Relies on third-party | ✅ Built-in |
-| **One-Click Deploy** | ❌ | ⚠️ Platform lock-in | ✅ Deploy anywhere |
-| **Dev/Prod Isolation** | ❌ | ❌ | ✅ Automatic |
-| **Automatic Backups** | ❌ | ⚠️ Paid feature | ✅ Built-in |
-| **AI Cost Control** | ❌ Pay per token | ❌ Subscription | ✅ Optimally balanced |
-| **Data Ownership** | ✅ | ❌ Platform-owned | ✅ Fully yours |
-| **Interface** | Terminal | Web UI | Terminal |
+The OpenClaw ecosystem has 5,700+ Skills and growing. But almost all of them are open-sourced, free, and easily copied. The real scarcity isn't more Skills — it's **expertise-backed, production-grade Skills worth paying for**.
+
+OpenClacky is built for the people who have that expertise.
+
+|  | **Openclaw** | **OpenClacky** |
+|---|---|---|
+| **Core model** | Open sharing | Encrypted & protected |
+| **Primary users** | Users who install Skills | Creators who sell Skills |
+| **Revenue** | None | Creator-defined pricing |
+| **Brand** | Platform brand | Your own brand |
+| **Driven by** | Technical contributors | Domain expertise |
+
+## How It Works
+
+**Four steps from capability to business:**
+
+1. **Craft your Skill** — Turn your domain methodology into a repeatable AI workflow
+2. **Encrypt & protect** — Your logic stays yours; clients can't inspect or copy it
+3. **Package your brand** — Ship under your name, your logo, your onboarding experience
+4. **Launch & acquire** — One-click sales page, built-in SEO, start converting traffic
+
+## Who It's For
+
+OpenClacky is built for domain experts whose knowledge can be expressed as *information processing + executable actions*:
+
+- **SEO specialists** — keyword research, content scoring, rank monitoring
+- **Lawyers** — contract review, case retrieval, risk flagging
+- **Traders** — signal detection, strategy backtesting, automated execution
+- **Data analysts** — cleaning, modeling, report generation
+- **Content strategists** — topic selection, outlines, drafts at scale
 
 ## Features
 
-- [x] `/new <project-name>` — Scaffold a full-stack Rails web app in seconds
-- [x] **Skills system** — Specialized AI workflows for deploy, frontend design, PDF, PPTX, and more
-- [x] **Cost monitoring & compression** — Real-time cost tracking, automatic message compression (up to 90% savings)
-- [x] **One-click deployment** — Ship to production with a single command (with Clacky CDE)
-- [x] **Autonomous AI agent** — Multi-step task execution with undo/redo
+- [x] **Skill builder** — Create AI workflows via conversation or UI, iterate and ship fast
+- [x] **Encryption** — Protect your knowledge assets; end users cannot read your Skill source
+- [x] **White-label packaging** — Your brand, your product line, your client experience
+- [x] **Auto-update delivery** — Push updates to all users seamlessly, with version control
+- [x] **Cross-platform distribution** — Windows, macOS, Linux — one Skill, every platform
+- [x] **Sales page generator** — Launch your storefront fast, with built-in SEO foundations
+- [x] **Cost monitoring** — Real-time token tracking, automatic compression (up to 90% savings)
 - [x] **Multi-provider support** — OpenAI, Anthropic, DeepSeek, and any OpenAI-compatible API
-- [ ] **Time Machine** — Visual history to rewind and branch any point in your project *(coming soon)*
+- [ ] **Skill marketplace** — Discover and distribute premium Skills *(coming soon)*
+
+## Coding Support
+
+OpenClacky also works as a general AI coding assistant — scaffold full-stack Rails apps, add features, or explore an unfamiliar codebase:
+
+```bash
+$ openclacky
+> /new my-app        # scaffold a full-stack Rails app
+> Add user auth with email and password
+> How does the payment module work?
+```
+
+Built on a production-ready Rails architecture with one-click deployment, dev/prod isolation, and automatic backups.
 
 ## Installation
 
@@ -65,49 +86,12 @@ gem install openclacky
 
 ## Configuration
 
-Before using Clacky, you need to configure your settings:
-
 ```bash
 $ openclacky
-
-- /config
+> /config
 ```
 
-You'll be prompted to enter:
-- **API Key**: Your API key from any OpenAI-compatible provider
-- **Model**: Model name
-- **Base URL**: OpenAI-compatible API endpoint
-
-## Usage
-
-### Scenario 1: Create a new web app
-
-```bash
-$ openclacky
-> /new my-blog
-# OpenClacky scaffolds a full-stack Rails app in seconds
-# > Add a posts page with title, content, and author fields
-# > Deploy to production
-# > exit
-```
-
-### Scenario 2: Build a feature in an existing project
-
-```bash
-$ cd ~/my-project && openclacky
-# > Add user authentication with email and password
-# > Write tests for the auth flow
-# > exit
-```
-
-### Scenario 3: Ask questions about your codebase
-
-```bash
-$ openclacky
-# > How does the payment module work?
-# > Where is the user session managed?
-# > exit
-```
+You'll be prompted to set your **API Key**, **Model**, and **Base URL** (any OpenAI-compatible provider).
 
 ## Install from Source
 
@@ -118,18 +102,10 @@ bundle install
 bin/clacky
 ```
 
-## Development
-
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/clacky` for an interactive prompt that will allow you to experiment.
-
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/clacky-ai/open-clacky. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](https://github.com/clacky-ai/open-clacky/blob/main/CODE_OF_CONDUCT.md).
+Bug reports and pull requests are welcome on GitHub at https://github.com/clacky-ai/open-clacky. Contributors are expected to adhere to the [code of conduct](https://github.com/clacky-ai/open-clacky/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
-The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
-
-## Code of Conduct
-
-Everyone interacting in the OpenClacky project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the [code of conduct](https://github.com/clacky-ai/open-clacky/blob/main/CODE_OF_CONDUCT.md).
+Available as open source under the [MIT License](https://opensource.org/licenses/MIT).
