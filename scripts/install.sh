@@ -72,36 +72,22 @@ command_exists() {
 # is slow (> SLOW_THRESHOLD_MS ms) or unreachable we assume the user is
 # behind the Great Firewall and print mirror / proxy suggestions.
 # ---------------------------------------------------------------------------
-SLOW_THRESHOLD_MS=3000   # ms — anything slower is flagged as "slow"
-NETWORK_OK=true           # set to false if any critical host fails
+SLOW_THRESHOLD_SEC=3     # seconds — anything slower is flagged as "slow"
+NETWORK_OK=true          # set to false if any critical host fails
 
-# Probe a single URL; echoes the round-trip time in ms, or "timeout" / "error".
+# Probe a single URL; echoes the round-trip time in seconds, or "timeout".
 _probe_url() {
     local url="$1"
     local timeout_sec=5
+    local start end elapsed http_code
 
-    # Use curl with a connect-timeout; measure wall-clock time via $SECONDS
-    local start
-    start=$(date +%s%3N 2>/dev/null || echo 0)   # milliseconds (GNU date / macOS gdate)
-
-    # macOS ships BSD date without %3N; fall back to python for ms precision
-    if [ "$start" = "0" ] && command_exists python3; then
-        start=$(python3 -c "import time; print(int(time.time()*1000))")
-    fi
-
-    local http_code
+    start=$(date +%s)
     http_code=$(curl -s -o /dev/null -w "%{http_code}" \
         --connect-timeout "$timeout_sec" \
         --max-time "$timeout_sec" \
         "$url" 2>/dev/null) || true
-
-    local end
-    end=$(date +%s%3N 2>/dev/null || echo 0)
-    if [ "$end" = "0" ] && command_exists python3; then
-        end=$(python3 -c "import time; print(int(time.time()*1000))")
-    fi
-
-    local elapsed=$(( end - start ))
+    end=$(date +%s)
+    elapsed=$(( end - start ))
 
     if [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
         echo "timeout"
@@ -115,12 +101,6 @@ check_network() {
     print_step "Network pre-flight check..."
 
     # critical = must be reachable for install to succeed
-    # optional = nice-to-have; failure gets a warning only
-    local -A LABELS=(
-        ["https://rubygems.org"]="RubyGems (gem install)"
-        ["https://mise.jdx.dev"]="mise installer"
-        ["https://raw.githubusercontent.com"]="GitHub raw content"
-    )
     local CRITICAL_HOSTS=(
         "https://rubygems.org"
         "https://mise.jdx.dev"
@@ -131,7 +111,14 @@ check_network() {
     local any_fail=false
 
     for url in "${CRITICAL_HOSTS[@]}"; do
-        local label="${LABELS[$url]}"
+        # Map URL to a human-readable label (no associative arrays for bash 3 compat)
+        local label
+        case "$url" in
+            *rubygems.org*)           label="RubyGems (gem install)" ;;
+            *mise.jdx.dev*)           label="mise installer" ;;
+            *raw.githubusercontent.com*) label="GitHub raw content" ;;
+            *)                        label="$url" ;;
+        esac
         local result
         result=$(_probe_url "$url")
 
@@ -139,12 +126,12 @@ check_network() {
             print_warning "✗ UNREACHABLE  ${label} (${url})"
             any_fail=true
             NETWORK_OK=false
-        elif [ "$result" -gt "$SLOW_THRESHOLD_MS" ] 2>/dev/null; then
-            print_warning "⚡ SLOW (${result}ms)  ${label} (${url})"
+        elif [ "$result" -gt "$SLOW_THRESHOLD_SEC" ] 2>/dev/null; then
+            print_warning "⚡ SLOW (${result}s)  ${label} (${url})"
             any_slow=true
             NETWORK_OK=false
         else
-            print_success "✓ OK (${result}ms)  ${label}"
+            print_success "✓ OK (${result}s)  ${label}"
         fi
     done
 
