@@ -64,6 +64,123 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# ---------------------------------------------------------------------------
+# Network pre-flight check
+#
+# Probes a set of URLs that the installer must reach.  For each one we record
+# whether the host is reachable and how long it took.  If any critical host
+# is slow (> SLOW_THRESHOLD_MS ms) or unreachable we assume the user is
+# behind the Great Firewall and print mirror / proxy suggestions.
+# ---------------------------------------------------------------------------
+SLOW_THRESHOLD_MS=3000   # ms — anything slower is flagged as "slow"
+NETWORK_OK=true           # set to false if any critical host fails
+
+# Probe a single URL; echoes the round-trip time in ms, or "timeout" / "error".
+_probe_url() {
+    local url="$1"
+    local timeout_sec=5
+
+    # Use curl with a connect-timeout; measure wall-clock time via $SECONDS
+    local start
+    start=$(date +%s%3N 2>/dev/null || echo 0)   # milliseconds (GNU date / macOS gdate)
+
+    # macOS ships BSD date without %3N; fall back to python for ms precision
+    if [ "$start" = "0" ] && command_exists python3; then
+        start=$(python3 -c "import time; print(int(time.time()*1000))")
+    fi
+
+    local http_code
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        --connect-timeout "$timeout_sec" \
+        --max-time "$timeout_sec" \
+        "$url" 2>/dev/null) || true
+
+    local end
+    end=$(date +%s%3N 2>/dev/null || echo 0)
+    if [ "$end" = "0" ] && command_exists python3; then
+        end=$(python3 -c "import time; print(int(time.time()*1000))")
+    fi
+
+    local elapsed=$(( end - start ))
+
+    if [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
+        echo "timeout"
+    else
+        echo "$elapsed"
+    fi
+}
+
+# Run the full pre-flight check and print a human-readable report.
+check_network() {
+    print_step "Network pre-flight check..."
+
+    # critical = must be reachable for install to succeed
+    # optional = nice-to-have; failure gets a warning only
+    local -A LABELS=(
+        ["https://rubygems.org"]="RubyGems (gem install)"
+        ["https://mise.jdx.dev"]="mise installer"
+        ["https://raw.githubusercontent.com"]="GitHub raw content"
+    )
+    local CRITICAL_HOSTS=(
+        "https://rubygems.org"
+        "https://mise.jdx.dev"
+        "https://raw.githubusercontent.com"
+    )
+
+    local any_slow=false
+    local any_fail=false
+
+    for url in "${CRITICAL_HOSTS[@]}"; do
+        local label="${LABELS[$url]}"
+        local result
+        result=$(_probe_url "$url")
+
+        if [ "$result" = "timeout" ]; then
+            print_warning "✗ UNREACHABLE  ${label} (${url})"
+            any_fail=true
+            NETWORK_OK=false
+        elif [ "$result" -gt "$SLOW_THRESHOLD_MS" ] 2>/dev/null; then
+            print_warning "⚡ SLOW (${result}ms)  ${label} (${url})"
+            any_slow=true
+            NETWORK_OK=false
+        else
+            print_success "✓ OK (${result}ms)  ${label}"
+        fi
+    done
+
+    if [ "$any_fail" = true ] || [ "$any_slow" = true ]; then
+        echo ""
+        print_warning "Network issues detected — you may be in mainland China or behind a firewall."
+        echo ""
+        echo "  ┌─ How to fix ──────────────────────────────────────────────────────────┐"
+        echo "  │                                                                       │"
+        echo "  │  Option 1 — Enable a VPN, then re-run this script.                  │"
+        echo "  │                                                                       │"
+        echo "  │  Option 2 — Set a proxy and re-run:                                  │"
+        echo "  │     export https_proxy=http://127.0.0.1:7890                         │"
+        echo "  │     export http_proxy=http://127.0.0.1:7890                          │"
+        echo "  │     curl -fsSL https://openclacky.com/install.sh | bash              │"
+        echo "  │                                                                       │"
+        echo "  └───────────────────────────────────────────────────────────────────────┘"
+        echo ""
+
+        if [ "$any_fail" = true ]; then
+            read -p "  Network problems found. Continue anyway? [y/N] " CONTINUE_REPLY
+            CONTINUE_REPLY="${CONTINUE_REPLY:-N}"
+            if [[ ! $CONTINUE_REPLY =~ ^[Yy]$ ]]; then
+                echo ""
+                print_info "Installation cancelled. Fix the network issues above and try again."
+                exit 1
+            fi
+        else
+            print_info "Proceeding despite slow network — installation may take longer than usual."
+        fi
+    else
+        print_success "All network checks passed!"
+    fi
+    echo ""
+}
+
 # Compare version strings
 version_ge() {
     # Returns 0 (true) if $1 >= $2
@@ -441,6 +558,7 @@ main() {
     echo ""
 
     detect_os
+    check_network
 
     # Strategy 1: Check Ruby and install via gem
     if check_ruby; then
