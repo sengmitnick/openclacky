@@ -21,7 +21,7 @@ module Clacky
            ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═╝
         LOGO
 
-        TAGLINE = "[>] AI Coding Assistant & Technical Co-founder"
+        TAGLINE = "[>] Your personal Assistant & Technical Co-founder"
 
         TIPS = [
           "[*] Ask questions, edit files, or run commands",
