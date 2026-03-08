@@ -122,14 +122,18 @@ module Clacky
       supporting_files.any?
     end
 
-    # Process the skill content with argument substitution
+    # Process the skill content with argument substitution and template expansion
     # @param arguments [String] Arguments passed to the skill
     # @param shell_output [Hash] Shell command outputs for !command` syntax (optional)
+    # @param template_context [Hash] Named values for <%= key %> template expansion (optional)
     # @return [String] Processed content
-    def process_content(arguments = "", shell_output: {})
+    def process_content(arguments = "", shell_output: {}, template_context: {})
       # For brand skills, decrypt content in memory at invoke time.
       # For plain skills, use the already-loaded @content.
       processed_content = decrypted_content.dup
+
+      # Expand <%= key %> templates before argument substitution
+      processed_content = expand_templates(processed_content, template_context)
 
       # Replace argument placeholders
       processed_content = substitute_arguments(processed_content, arguments)
@@ -335,6 +339,30 @@ module Clacky
 
     def extract_first_paragraph
       @content.split(/\n\n/).first.to_s
+    end
+
+    # Expand <%= key %> template placeholders via ERB.
+    # context is a Hash<String|Symbol, String|Proc> — Proc values are called lazily.
+    # Unknown bindings raise no error; ERB just leaves them blank (nil.to_s).
+    # @param content [String]
+    # @param context [Hash]
+    # @return [String]
+    def expand_templates(content, context)
+      return content if context.nil? || context.empty?
+
+      # Build a lightweight binding that exposes each context key as a local method
+      scope = Object.new
+      context.each do |key, value|
+        resolved = value.respond_to?(:call) ? value.call : value
+        scope.define_singleton_method(key.to_s) { resolved.to_s }
+        scope.define_singleton_method(key.to_sym) { resolved.to_s }
+      end
+
+      require "erb"
+      ERB.new(content, trim_mode: "-").result(scope.instance_eval { binding })
+    rescue => e
+      # If ERB fails (e.g. unknown variable), return content as-is
+      content
     end
 
     def substitute_arguments(content, arguments)

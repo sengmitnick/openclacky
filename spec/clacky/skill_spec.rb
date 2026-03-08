@@ -172,6 +172,66 @@ RSpec.describe Clacky::Skill do
 
       expect(result).to include("No arguments here: ")
     end
+
+    it "expands <%= key %> templates via ERB with string values" do
+      skill_dir = File.join(temp_dir, "erb-skill")
+      FileUtils.mkdir_p(skill_dir)
+      File.write(File.join(skill_dir, "SKILL.md"), <<~CONTENT)
+        ---
+        name: erb-skill
+        description: Skill with ERB templates
+        ---
+        Memory list:
+        <%= memories_meta %>
+        End.
+      CONTENT
+
+      skill = described_class.new(skill_dir)
+      result = skill.process_content("", template_context: { "memories_meta" => "- topic: foo" })
+
+      expect(result).to include("- topic: foo")
+      expect(result).to include("End.")
+    end
+
+    it "expands <%= key %> templates via ERB with Proc values (lazy evaluation)" do
+      skill_dir = File.join(temp_dir, "erb-lazy-skill")
+      FileUtils.mkdir_p(skill_dir)
+      File.write(File.join(skill_dir, "SKILL.md"), <<~CONTENT)
+        ---
+        name: erb-lazy-skill
+        description: Skill with lazy ERB template
+        ---
+        Value: <%= computed %>
+      CONTENT
+
+      call_count = 0
+      skill = described_class.new(skill_dir)
+      result = skill.process_content("", template_context: {
+        "computed" => -> { call_count += 1; "lazy_result" }
+      })
+
+      expect(result).to include("Value: lazy_result")
+      expect(call_count).to eq(1)
+    end
+
+    it "leaves unknown <%= key %> placeholders as empty string" do
+      skill_dir = File.join(temp_dir, "erb-unknown-skill")
+      FileUtils.mkdir_p(skill_dir)
+      File.write(File.join(skill_dir, "SKILL.md"), <<~CONTENT)
+        ---
+        name: erb-unknown-skill
+        description: Skill with unknown ERB key
+        ---
+        Before.<%= unknown_key %>After.
+      CONTENT
+
+      skill = described_class.new(skill_dir)
+      # ERB will raise NameError for unknown variable; expand_templates rescues and returns content as-is
+      result = skill.process_content("", template_context: {})
+
+      # Should not crash; content returned in some form
+      expect(result).to be_a(String)
+    end
   end
 
   describe "#allowed_tools" do

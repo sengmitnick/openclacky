@@ -114,6 +114,69 @@ module Clacky
 
       private
 
+      # Build template context for skill content expansion.
+      # Provides named values that can be used as <%= key %> in SKILL.md files.
+      # Values are lazy Procs to avoid expensive computation unless actually needed.
+      # @return [Hash<String, Proc>]
+      def build_template_context
+        {
+          "memories_meta" => -> { load_memories_meta }
+        }
+      end
+
+      # Scan ~/.clacky/memories/ and return a formatted summary of all memory files.
+      # Parses YAML frontmatter (same pattern as Skill#parse_frontmatter) for each file.
+      # @return [String] Formatted list of memory topics and descriptions
+      def load_memories_meta
+        memories_dir = memories_base_dir
+        return "(No long-term memories found.)" unless Dir.exist?(memories_dir)
+
+        files = Dir.glob(File.join(memories_dir, "*.md"))
+                    .sort_by { |f| File.mtime(f) }
+                    .reverse
+                    .first(20)
+        return "(No long-term memories found.)" if files.empty?
+
+        lines = ["Available memory files in ~/.clacky/memories/:"]
+        lines << ""
+
+        files.each do |path|
+          filename = File.basename(path)
+          fm = parse_memory_frontmatter(path)
+          topic       = fm["topic"]       || filename.sub(/\.md$/, "")
+          description = fm["description"] || "(no description)"
+          updated_at  = fm["updated_at"]
+
+          entry = "- **#{filename}** | topic: #{topic} | #{description}"
+          entry += " | updated: #{updated_at}" if updated_at
+          lines << entry
+        end
+
+        lines.join("\n")
+      end
+
+      # Base directory for long-term memories. Override in tests for isolation.
+      # @return [String]
+      def memories_base_dir
+        File.expand_path("~/.clacky/memories")
+      end
+
+      # Parse YAML frontmatter from a memory file.
+      # Returns empty hash if no frontmatter found or parsing fails.
+      # @param path [String] Absolute path to the .md file
+      # @return [Hash]
+      def parse_memory_frontmatter(path)
+        content = File.read(path)
+        return {} unless content.start_with?("---")
+
+        match = content.match(/\A---\n(.*?)\n---/m)
+        return {} unless match
+
+        YAML.safe_load(match[1]) || {}
+      rescue => e
+        {}
+      end
+
       # Execute a skill in a forked subagent
       # @param skill [Skill] The skill to execute
       # @param arguments [String] Arguments for the skill
@@ -127,7 +190,7 @@ module Clacky
         # which arrives *after* the assistant acknowledgement injected by fork_subagent.
         # This gives the subagent a clear 3-part structure:
         #   [user] role/constraints  →  [assistant] acknowledgement  →  [user] actual task
-        skill_instructions = skill.process_content("")
+        skill_instructions = skill.process_content("", template_context: build_template_context)
 
         # Fork subagent with skill configuration
         subagent = fork_subagent(

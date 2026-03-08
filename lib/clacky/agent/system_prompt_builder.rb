@@ -54,6 +54,9 @@ module Clacky
         Do NOT recall proactively — only when genuinely needed.
       PROMPT
 
+      # Max characters loaded from each agent file (SOUL.md / USER.md)
+      MAX_MEMORY_FILE_CHARS = 1000
+
       # Build complete system prompt with project rules and skills
       # @return [String] Complete system prompt
       def build_system_prompt
@@ -93,19 +96,24 @@ module Clacky
         end
 
         # Load agent soul and user profile from ~/.clacky/agents/
+        # Each file is capped at MAX_MEMORY_FILE_CHARS to keep system prompt size under control
         agents_dir = File.expand_path("~/.clacky/agents")
         [
-          { file: "SOUL.md", label: "AGENT SOUL" },
-          { file: "USER.md", label: "USER PROFILE" }
+          { path: File.join(agents_dir, "SOUL.md"), label: "AGENT SOUL" },
+          { path: File.join(agents_dir, "USER.md"), label: "USER PROFILE" }
         ].each do |entry|
-          path = File.join(agents_dir, entry[:file])
-          next unless File.exist?(path)
+          next unless File.exist?(entry[:path])
 
-          content = File.read(path).strip
+          content = File.read(entry[:path]).strip
           next if content.empty?
 
+          if content.length > MAX_MEMORY_FILE_CHARS
+            content = content[0, MAX_MEMORY_FILE_CHARS] + "\n... [truncated]"
+          end
+
+          relative = entry[:path].sub(File.expand_path("~"), "~")
           prompt += "\n\n" + "=" * 80 + "\n"
-          prompt += "#{entry[:label]} (from ~/.clacky/agents/#{entry[:file]}):\n"
+          prompt += "#{entry[:label]} (from #{relative}):\n"
           prompt += "=" * 80 + "\n"
           prompt += content
           prompt += "\n" + "=" * 80
