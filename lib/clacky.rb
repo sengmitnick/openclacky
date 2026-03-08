@@ -20,6 +20,7 @@ require_relative "clacky/ui2/thinking_verbs"
 require_relative "clacky/ui2/progress_indicator"
 
 # Utils
+require_relative "clacky/utils/logger"
 require_relative "clacky/utils/model_pricing"
 require_relative "clacky/utils/gitignore_parser"
 require_relative "clacky/utils/limit_stack"
