@@ -31,7 +31,7 @@ module Clacky
           result.merge!(hook_result) if hook_result.is_a?(Hash)
         rescue StandardError => e
           # Log error but don't fail
-          warn "Hook error in #{event}: #{e.message}"
+          Clacky::Logger.error("Hook error", event: event, error: e)
         end
       end
 

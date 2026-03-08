@@ -182,6 +182,7 @@ module Clacky
         awaiting_user_feedback = false
 
         loop do
+
           break if should_stop?
 
           @iterations += 1
@@ -211,6 +212,9 @@ module Clacky
                 @ui&.log("Response content: #{preview}", level: :debug)
               end
             end
+
+            # Inject memory update prompt and let the loop handle it naturally
+            next if inject_memory_prompt!
 
             break
           end
@@ -260,9 +264,6 @@ module Clacky
           save_modified_files_snapshot(@modified_files_in_task)
           @modified_files_in_task = []  # Reset for next task
         end
-        
-        # Trigger long-term memory update at end of session
-        trigger_memory_update
 
         @ui&.show_complete(
           iterations: result[:iterations],
@@ -285,10 +286,14 @@ module Clacky
           error_message: e.message,
           backtrace: e.backtrace&.first(30) # Keep first 30 lines of backtrace
         }
+        Clacky::Logger.error("agent_run_error", error: e)
 
         # Build error result for session data, but let CLI handle error display
         result = build_result(:error, error: e.message)
         raise
+      ensure
+        # Always clean up memory update messages, even if interrupted or error occurred
+        cleanup_memory_messages
       end
     end
 
@@ -308,9 +313,18 @@ module Clacky
         @ui&.show_info(
           "Message history compression starting (~#{compression_context[:original_token_count]} tokens, #{compression_context[:original_message_count]} messages) - Level #{compression_context[:compression_level]}"
         )
-        @messages << compression_context[:compression_message]
-        response = call_llm
-        handle_compression_response(response, compression_context)
+        compression_message = compression_context[:compression_message]
+        @messages << compression_message
+        compression_handled = false
+        begin
+          response = call_llm
+          handle_compression_response(response, compression_context)
+          compression_handled = true
+        ensure
+          # If interrupted or failed, remove the dangling compression message
+          # so it doesn't pollute future conversation turns
+          @messages.pop if !compression_handled && @messages.last.equal?(compression_message)
+        end
         return nil
       end
 
@@ -546,6 +560,7 @@ module Clacky
             error_message: e.message,
             backtrace: e.backtrace&.first(20) # Keep first 20 lines of backtrace
           }
+          Clacky::Logger.error("tool_execution_error", tool: call[:name], error: e)
 
           @hooks.trigger(:on_tool_error, call, e)
           @ui&.show_tool_error(e)

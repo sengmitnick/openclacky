@@ -143,8 +143,7 @@ module Clacky
           sleep(sleep_s)
         end
       rescue => e
-        $stderr.puts "[Clacky Scheduler] Fatal error: #{e.class}: #{e.message}"
-        $stderr.puts e.backtrace&.first(5)&.join("\n")
+        Clacky::Logger.error("scheduler_fatal_error", error: e)
       end
 
       # Check all enabled schedules against the given time and fire matching ones.
@@ -155,7 +154,7 @@ module Clacky
 
           fire_task(schedule)
         rescue => e
-          $stderr.puts "[Clacky Scheduler] Error processing schedule '#{schedule["name"]}': #{e.message}"
+          Clacky::Logger.error("scheduler_tick_error", schedule: schedule["name"], error: e)
         end
       end
 
@@ -171,7 +170,7 @@ module Clacky
         # Scheduled tasks run unattended — use auto_approve so request_user_feedback doesn't block.
         session_id = @session_builder.call(name: name, working_dir: working_dir, permission_mode: :auto_approve)
 
-        $stdout.puts "[Clacky Scheduler] Firing task '#{task_name}' (session: #{session_id})"
+        Clacky::Logger.info("scheduler_task_fired", task: task_name, session: session_id)
 
         # Run the agent in a background thread so the scheduler tick is non-blocking.
         Thread.new do
@@ -183,13 +182,14 @@ module Clacky
           @registry.update(session_id, status: :running)
           agent.run(prompt)
           @registry.update(session_id, status: :idle)
+          Clacky::Logger.info("scheduler_task_completed", task: task_name, session: session_id)
         rescue => e
           @registry.update(session_id, status: :error, error: e.message)
-          $stderr.puts "[Clacky Scheduler] Task '#{task_name}' failed: #{e.message}"
+          Clacky::Logger.error("scheduler_task_failed", task: task_name, session: session_id, error: e)
         end
 
       rescue => e
-        $stderr.puts "[Clacky Scheduler] Failed to fire task '#{schedule["task"]}': #{e.message}"
+        Clacky::Logger.error("scheduler_fire_error", task: schedule["task"], error: e)
       end
 
       # ── Cron parsing ─────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ module Clacky
         data = YAML.load_file(SCHEDULES_FILE, permitted_classes: [Symbol])
         Array(data)
       rescue => e
-        $stderr.puts "[Clacky Scheduler] Failed to load schedules: #{e.message}"
+        Clacky::Logger.error("scheduler_load_schedules_error", error: e)
         []
       end
 

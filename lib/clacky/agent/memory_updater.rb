@@ -79,14 +79,16 @@ module Clacky
         task_iterations >= MEMORY_UPDATE_MIN_ITERATIONS
       end
 
-      # Trigger memory update at end of session
-      # Inserts a memory update instruction into the conversation and runs one LLM turn
-      def trigger_memory_update
-        return unless should_update_memory?
+      # Inject memory update prompt into @messages so the main agent loop handles it.
+      # Called at the natural stop point of the main loop.
+      # Returns true if prompt was injected, false otherwise.
+      def inject_memory_prompt!
+        return false unless should_update_memory?
+        return false if @memory_prompt_injected
 
+        @memory_prompt_injected = true
         @ui&.show_info("Updating long-term memory...")
 
-        # Insert memory update instruction as a user message
         @messages << {
           role: "user",
           content: MEMORY_UPDATE_PROMPT,
@@ -94,27 +96,17 @@ module Clacky
           memory_update: true
         }
 
-        begin
-          # Run one LLM turn — it will call write tool to update files
-          response = think
-          return if response.nil?
+        true
+      end
 
-          # If LLM calls tools (write), execute them
-          until response[:tool_calls].nil? || response[:tool_calls].empty? || response[:finish_reason] == "stop"
-            act(response[:tool_calls])
-            observe(response, [])
-            response = think
-            break if response.nil?
-          end
+      # Clean up memory update messages from conversation history after loop ends.
+      # Call this once after the main loop finishes.
+      def cleanup_memory_messages
+        return unless @memory_prompt_injected
 
-          @ui&.show_info("Memory updated.")
-        rescue StandardError => e
-          @ui&.log("Memory update failed: #{e.message}", level: :warn)
-        ensure
-          # Remove the memory update instruction from conversation history
-          # so it doesn't pollute future context
-          @messages.reject! { |m| m[:memory_update] }
-        end
+        @messages.reject! { |m| m[:memory_update] }
+        @memory_prompt_injected = false
+        @ui&.show_info("Memory updated.")
       end
 
       private def memory_update_enabled?
