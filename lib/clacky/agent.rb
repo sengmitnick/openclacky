@@ -676,7 +676,7 @@ module Clacky
     # @return [Agent] New subagent instance
     def fork_subagent(model: nil, forbidden_tools: [], system_prompt_suffix: nil)
       # Clone config to avoid affecting parent
-      subagent_config = @config.dup
+      subagent_config = @config.deep_copy
 
       # Switch to specified model if provided
       if model

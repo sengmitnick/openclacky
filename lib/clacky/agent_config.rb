@@ -226,6 +226,16 @@ module Clacky
     end
 
     # Save configuration to file
+    # Deep copy — models array contains mutable Hashes, so a shallow dup would
+    # let the copy share the same Hash objects with the original, causing
+    # Settings changes to silently mutate already-running session configs.
+    # JSON round-trip is the cleanest approach since @models is pure JSON-able data.
+    def deep_copy
+      copy = dup
+      copy.instance_variable_set(:@models, JSON.parse(JSON.generate(@models)))
+      copy
+    end
+
     def save(config_file = CONFIG_FILE)
       config_dir = File.dirname(config_file)
       FileUtils.mkdir_p(config_dir)
