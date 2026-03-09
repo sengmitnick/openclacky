@@ -31,8 +31,8 @@ module Clacky
           # Check if user can invoke this skill
           return nil unless skill.user_invocable?
 
-          # Check if this skill is allowed by the current agent profile
-          return nil if @agent_profile && !@agent_profile.skill_allowed?(skill.identifier)
+          # Check if this skill is allowed for the current agent profile
+          return nil if @agent_profile && !skill.allowed_for_agent?(@agent_profile.name)
 
           { skill: skill, arguments: arguments }
         else
@@ -82,7 +82,7 @@ module Clacky
         context += "=" * 80 + "\n\n"
         context += "CRITICAL SKILL USAGE RULES:\n"
         context += "- When user's request matches a skill description, you MUST use invoke_skill tool — invoke only the single BEST matching skill, do NOT call multiple skills for the same request\n"
-        context += "- Example: invoke_skill(skill_name: 'code-explorer', task: 'Analyze project structure')\n"
+        context += "- Example: invoke_skill(skill_name: 'xxx', task: 'xxx')\n"
         context += "- SLASH COMMAND (HIGHEST PRIORITY): If user input starts with /skill_name, you MUST invoke_skill immediately as the first action with no exceptions.\n"
         context += "\n"
         context += "Available skills:\n\n"
@@ -115,14 +115,16 @@ module Clacky
 
       private
 
-      # Filter skills by the agent profile's skill whitelist.
-      # If no profile is set, all skills are allowed (backward-compatible).
+      # Filter skills by the agent profile name using the skill's own `agent:` field.
+      # Each skill declares which agents it supports via its frontmatter `agent:` field.
+      # If the skill has no `agent:` field (defaults to "all"), it is allowed everywhere.
+      # If no agent profile is set, all skills are allowed (backward-compatible).
       # @param skills [Array<Skill>]
       # @return [Array<Skill>]
       def filter_skills_by_profile(skills)
         return skills unless @agent_profile
 
-        skills.select { |skill| @agent_profile.skill_allowed?(skill.identifier) }
+        skills.select { |skill| skill.allowed_for_agent?(@agent_profile.name) }
       end
 
       # Build template context for skill content expansion.

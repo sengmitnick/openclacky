@@ -1,6 +1,7 @@
 ---
 name: deploy
 description: Deploy Rails applications to Railway PaaS
+agent: coding
 fork_agent: true
 ---
 

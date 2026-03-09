@@ -46,7 +46,7 @@ module Clacky
           return unless skill_loader
 
           skills = skill_loader.user_invocable_skills
-          skills = skills.select { |s| agent_profile.skill_allowed?(s.identifier) } if agent_profile
+          skills = skills.select { |s| s.allowed_for_agent?(agent_profile.name) } if agent_profile
 
           @skill_commands = skills.map do |skill|
             {

@@ -1,6 +1,7 @@
 ---
 name: new
 description: Create a new project to start development quickly
+agent: coding
 disable-model-invocation: false
 user-invocable: true
 ---

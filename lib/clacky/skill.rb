@@ -95,6 +95,30 @@ module Clacky
       @auto_summarize != false
     end
 
+    # Get the agent scope for this skill.
+    # Parsed from the `agent:` frontmatter field.
+    # Returns an array of agent names, or ["all"] if not specified.
+    # @return [Array<String>]
+    def agents_scope
+      return ["all"] if @agent_type.nil?
+
+      case @agent_type
+      when "all" then ["all"]
+      when Array then @agent_type.map(&:to_s)
+      else [@agent_type.to_s]
+      end
+    end
+
+    # Check if this skill is allowed for the given agent profile name.
+    # Returns true when the skill's `agent:` field is "all" (default) or
+    # includes the given profile name.
+    # @param profile_name [String] e.g. "coding", "general"
+    # @return [Boolean]
+    def allowed_for_agent?(profile_name)
+      scope = agents_scope
+      scope.include?("all") || scope.include?(profile_name.to_s)
+    end
+
     # Get the slash command for this skill
     # @return [String] e.g., "/explain-code"
     def slash_command

@@ -35,7 +35,7 @@ module Clacky
     attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile
 
-    def initialize(client, config = {}, working_dir: nil, ui: nil, profile: "coding")
+    def initialize(client, config , working_dir: , ui: , profile: )
       @client = client  # Client for current model
       @config = config.is_a?(AgentConfig) ? config : AgentConfig.new(config)
       @agent_profile = AgentProfile.load(profile)
@@ -90,8 +90,9 @@ module Clacky
     end
 
     # Restore from a saved session
-    def self.from_session(client, config, session_data, ui: nil, profile: "coding")
-      agent = new(client, config, ui: ui, profile: profile)
+    def self.from_session(client, config, session_data, ui: nil, profile:)
+      working_dir = session_data[:working_dir] || session_data["working_dir"] || Dir.pwd
+      agent = new(client, config, working_dir: working_dir, ui: ui, profile: profile)
       agent.restore_session(session_data)
       agent
     end
@@ -143,7 +144,7 @@ module Clacky
     def run(user_input, images: [])
       # Start new task for Time Machine
       task_id = start_new_task
-      
+
       @start_time = Time.now
       @task_cost_source = :estimated  # Reset for new task
       # Note: Do NOT reset @previous_total_tokens here - it should maintain the value from the last iteration
@@ -259,7 +260,7 @@ module Clacky
         end
 
         result = build_result(:success)
-        
+
         # Save snapshots of modified files for Time Machine
         if @modified_files_in_task && !@modified_files_in_task.empty?
           save_modified_files_snapshot(@modified_files_in_task)
@@ -488,16 +489,16 @@ module Clacky
           progress_shown = false
           progress_timer = nil
           output_buffer = nil
-          
+
           if @ui
             progress_message = build_tool_progress_message(call[:name], args)
-            
+
             # For shell commands, create shared output buffer
             if call[:name] == "shell" || call[:name] == "safe_shell"
               output_buffer = { content: "", timestamp: Time.now }
               args[:output_buffer] = output_buffer
             end
-            
+
             progress_timer = Thread.new do
               sleep 2
               @ui.show_progress(progress_message, prefix_newline: false, output_buffer: output_buffer)
@@ -700,12 +701,13 @@ module Clacky
         anthropic_format: subagent_config.anthropic_format?
       )
 
-      # Create subagent (reuses all tools from parent)
+      # Create subagent (reuses all tools from parent, inherits agent profile from parent)
       subagent = self.class.new(
         subagent_client,
         subagent_config,
         working_dir: @working_dir,
-        ui: @ui
+        ui: @ui,
+        profile: @agent_profile.name
       )
 
       # Deep clone messages to avoid cross-contamination
@@ -829,7 +831,7 @@ module Clacky
     # @param args [Hash] Arguments passed to the tool
     def track_modified_files(tool_name, args)
       @modified_files_in_task ||= []
-      
+
       case tool_name
       when "write", "edit"
         file_path = args[:path]

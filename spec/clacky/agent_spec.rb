@@ -13,7 +13,7 @@ RSpec.describe Clacky::Agent do
       permission_mode: :auto_approve
     )
   end
-  let(:agent) { described_class.new(client, config) }
+  let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
 
   describe "#initialize" do
     it "sets initial state" do
@@ -387,7 +387,7 @@ RSpec.describe Clacky::Agent do
         keep_recent_messages: 5
       )
     end
-    let(:compression_agent) { described_class.new(client, compression_config) }
+    let(:compression_agent) { described_class.new(client, compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
 
     before do
       # Mock send_messages for LLM compression
@@ -461,7 +461,7 @@ RSpec.describe Clacky::Agent do
         enable_compression: false,
         keep_recent_messages: 5
       )
-      no_compression_agent = described_class.new(client, no_compression_config)
+      no_compression_agent = described_class.new(client, no_compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding")
 
       messages = no_compression_agent.instance_variable_get(:@messages)
 
@@ -589,7 +589,7 @@ RSpec.describe Clacky::Agent do
     end
 
     it "restores session state correctly" do
-      restored_agent = described_class.from_session(client, config, session_data)
+      restored_agent = described_class.from_session(client, config, session_data, profile: "coding")
 
       expect(restored_agent.session_id).to eq("test-session-123")
       expect(restored_agent.iterations).to eq(5)
@@ -613,7 +613,7 @@ RSpec.describe Clacky::Agent do
       end
 
       it "rolls back the last user message" do
-        restored_agent = described_class.from_session(client, config, error_session_data)
+        restored_agent = described_class.from_session(client, config, error_session_data, profile: "coding")
 
         # Should have rolled back the error-causing message
         expect(restored_agent.messages.size).to eq(3) # system + user + assistant, not the error-causing user message
@@ -624,7 +624,7 @@ RSpec.describe Clacky::Agent do
         hook_data = nil
         
         # Create a new agent to add the hook
-        agent_with_hook = described_class.new(client, config)
+        agent_with_hook = described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding")
         agent_with_hook.add_hook(:session_rollback) do |data|
           hook_data = data
         end

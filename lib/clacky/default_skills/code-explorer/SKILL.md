@@ -1,6 +1,7 @@
 ---
 name: code-explorer
 description: Use this skill when exploring, analyzing, or understanding project/code structure. Required for tasks like "analyze project", "explore codebase", "understand how X works".
+agent: coding
 fork_agent: true
 forbidden_tools:
   - write

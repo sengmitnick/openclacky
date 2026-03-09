@@ -368,7 +368,7 @@ module Clacky
         say ""
       end
 
-      def load_latest_session(client, agent_config, session_manager, working_dir, profile: "coding")
+      def load_latest_session(client, agent_config, session_manager, working_dir, profile:)
         session_data = session_manager.latest_for_directory(working_dir)
 
         if session_data.nil?
@@ -380,7 +380,7 @@ module Clacky
         Clacky::Agent.from_session(client, agent_config, session_data, profile: profile)
       end
 
-      def load_session_by_number(client, agent_config, session_manager, working_dir, identifier, profile: "coding")
+      def load_session_by_number(client, agent_config, session_manager, working_dir, identifier, profile:)
         # Get a larger list to search through (for ID prefix matching)
         sessions = session_manager.list(current_dir: working_dir, limit: 100)
 
@@ -480,7 +480,7 @@ module Clacky
       #   {"type":"confirmation","id":"conf_1","result":"yes"} — answer to request_confirmation
       #
       # If a bare string line is received it is treated as a message content.
-      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client, profile: "coding")
+      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client, profile:)
         json_ui = Clacky::JsonUIController.new
         agent.instance_variable_set(:@ui, json_ui)
 

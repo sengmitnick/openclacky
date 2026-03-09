@@ -21,13 +21,12 @@ module Clacky
     DEFAULT_AGENTS_DIR = File.expand_path("../default_agents", __FILE__).freeze
     USER_AGENTS_DIR = File.expand_path("~/.clacky/agents").freeze
 
-    attr_reader :name, :description, :skills
+    attr_reader :name, :description
 
     def initialize(name)
       @name = name.to_s
       profile_data = load_profile_yml
       @description = profile_data["description"] || ""
-      @skills = Array(profile_data["skills"])
       @system_prompt_content = load_agent_file("system_prompt.md")
     end
 
@@ -56,11 +55,6 @@ module Clacky
     # @return [String] user profile content (user override → built-in default)
     def user_profile
       load_global_file("USER.md")
-    end
-
-    # @return [Boolean] whether a given skill name is allowed for this profile
-    def skill_allowed?(skill_name)
-      @skills.include?(skill_name.to_s)
     end
 
     private def load_profile_yml
