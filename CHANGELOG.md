@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-03-09
+
+### Added
+- **Skill count limits**: two-layer guard to keep context tokens bounded — at most 50 skills loaded from disk (`MAX_SKILLS`) and at most 30 injected into the system prompt (`MAX_CONTEXT_SKILLS`); excess skills are skipped and a warning is written to the file logger
+
+### Improved
+- Skill `agent` field is now self-declared in each `SKILL.md` instead of being listed in `profile.yml` — makes skill-to-profile assignment portable and removes the need to edit profile config when adding skills
+- Slash command autocomplete in the web UI now filters by the active session's agent profile, so only relevant skills appear
+
+### Fixed
+- CLI startup crash: `ui: nil` keyword argument now correctly passed to `Agent.new`
+
 ## [0.8.1] - 2026-03-09
 
 ### Added
