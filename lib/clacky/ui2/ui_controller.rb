@@ -90,6 +90,13 @@ module Clacky
         input_loop
       end
 
+      # Set skill loader for command suggestions in the input area
+      # @param skill_loader [Clacky::SkillLoader] The skill loader instance
+      # @param agent_profile [Clacky::AgentProfile, nil] Current agent profile for skill filtering
+      def set_skill_loader(skill_loader, agent_profile = nil)
+        @input_area.set_skill_loader(skill_loader, agent_profile)
+      end
+
       # Update session bar with current stats
       # @param tasks [Integer] Number of completed tasks (optional)
       # @param cost [Float] Total cost (optional)
@@ -170,11 +177,11 @@ module Clacky
         @time_machine_callback = block
       end
 
-      # Set skill loader for command suggestions
-      # @param skill_loader [Clacky::SkillLoader] The skill loader instance
+      # Set agent for command suggestions
+      # @param agent [Clacky::Agent] The agent instance with skill management
       # @param agent_profile [Clacky::AgentProfile, nil] Current agent profile for skill filtering
-      def set_skill_loader(skill_loader, agent_profile = nil)
-        @input_area.set_skill_loader(skill_loader, agent_profile)
+      def set_agent(agent, agent_profile = nil)
+        @input_area.set_agent(agent, agent_profile)
       end
 
       # Append output to the output area
@@ -892,9 +899,10 @@ module Clacky
         # If in fullscreen mode, only handle Ctrl+O to exit
         if @layout.fullscreen_mode?
           if key == :ctrl_o
-            # Kill the real-time refresh thread before exiting fullscreen
-            @fullscreen_refresh_thread&.kill
-            @fullscreen_refresh_thread = nil
+            # Signal the real-time refresh thread to stop gracefully, then join it.
+            # Avoid Thread#kill which can interrupt the thread mid-render and
+            # leave @render_mutex permanently locked.
+            stop_fullscreen_refresh_thread
             @layout.exit_fullscreen
             # Restore main screen content after returning from alternate buffer
             @layout.rerender_all
