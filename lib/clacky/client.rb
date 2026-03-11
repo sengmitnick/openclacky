@@ -29,7 +29,7 @@ module Clacky
         response = anthropic_connection.post("v1/messages") do |req|
           req.body = {
             model: model,
-            max_tokens: 10,
+            max_tokens: 16,
             messages: [
               {
                 role: "user",
@@ -43,7 +43,7 @@ module Clacky
         response = openai_connection.post("chat/completions") do |req|
           req.body = {
             model: model,
-            max_tokens: 10,
+            max_tokens: 16,
             messages: [
               {
                 role: "user",
