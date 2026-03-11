@@ -219,6 +219,7 @@ module Clacky
         when ["GET",    "/api/onboard/status"]    then api_onboard_status(res)
         when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
         when ["POST",   "/api/onboard/skip-soul"] then api_onboard_skip_soul(res)
+        when ["GET",    "/api/store/skills"]          then api_store_skills(res)
         when ["GET",    "/api/brand/status"]      then api_brand_status(res)
         when ["POST",   "/api/brand/activate"]    then api_brand_activate(req, res)
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
@@ -258,6 +259,9 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/brand/skills/[^/]+/install$})
             slug = URI.decode_www_form_component(path.sub("/api/brand/skills/", "").sub("/install", ""))
             api_brand_skill_install(slug, req, res)
+          elsif method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
+            name = URI.decode_www_form_component(path.sub("/api/my-skills/", "").sub("/publish", ""))
+            api_publish_my_skill(name, req, res)
           else
             not_found(res)
           end
@@ -387,7 +391,9 @@ module Clacky
           needs_activation: false,
           brand_name:       brand.brand_name,
           warning:          warning,
-          test_mode:        @brand_test
+          test_mode:        @brand_test,
+          user_licensed:    brand.user_licensed?,
+          license_user_id:  brand.license_user_id
         })
       end
 
@@ -410,7 +416,12 @@ module Clacky
           # Refresh skill_loader with the now-activated brand config so brand
           # skills are loadable from this point forward (e.g. after sync).
           @skill_loader = Clacky::SkillLoader.new(working_dir: nil, brand_config: brand)
-          json_response(res, 200, { ok: true, brand_name: result[:brand_name] || brand.brand_name })
+          json_response(res, 200, {
+            ok:           true,
+            brand_name:   result[:brand_name] || brand.brand_name,
+            user_id:      result[:user_id] || brand.license_user_id,
+            user_licensed: brand.user_licensed?
+          })
         else
           json_response(res, 422, { ok: false, error: result[:message] })
         end
@@ -420,6 +431,27 @@ module Clacky
       # Fetches the brand skills list from the cloud, enriched with local installed version.
       # Returns 200 with skill list, or 403 when license is not activated.
       # If the remote API call fails, falls back to locally installed skills with a warning.
+      # GET /api/store/skills
+      # Returns the public skill store catalog from the OpenClacky Cloud API.
+      # Requires an activated license — uses HMAC auth with scope: "store" to fetch
+      # platform-wide published public skills (not filtered by the user's own skills).
+      # Falls back to the hardcoded catalog when license is not activated or API is unavailable.
+      def api_store_skills(res)
+        brand  = Clacky::BrandConfig.load
+        result = brand.fetch_store_skills!
+
+        if result[:success]
+          json_response(res, 200, { ok: true, skills: result[:skills] })
+        else
+          # License not activated or remote API unavailable — return empty list
+          json_response(res, 200, {
+            ok:      true,
+            skills:  [],
+            warning: result[:error] || "Could not reach the skill store."
+          })
+        end
+      end
+
       def api_brand_skills(res)
         brand = Clacky::BrandConfig.load
 
@@ -495,7 +527,7 @@ module Clacky
         if result[:success]
           # Reload skills so the Agent can pick up the new skill immediately.
           # Re-create the loader with the current brand_config so brand skills are decryptable.
-          @skill_loader = Clacky::SkillLoader.new(nil, brand_config: brand)
+          @skill_loader = Clacky::SkillLoader.new(working_dir: nil, brand_config: brand)
           json_response(res, 200, { ok: true, slug: result[:slug], version: result[:version] })
         else
           json_response(res, 422, { ok: false, error: result[:error] })
@@ -667,7 +699,7 @@ module Clacky
           latest_v = (skill["latest_version"] || {})["version"]
           skill.merge(
             "installed_version" => local ? local["version"] : nil,
-            "needs_update"      => local ? (local["version"] != latest_v) : false
+            "needs_update"      => local ? Clacky::BrandConfig.version_older?(local["version"], latest_v) : false
           )
         end
 
@@ -848,6 +880,103 @@ module Clacky
         json_response(res, 200, { ok: true, name: skill.identifier, enabled: !skill.disabled? })
       rescue Clacky::AgentError => e
         json_response(res, 422, { error: e.message })
+      end
+
+      # POST /api/my-skills/:name/publish
+      # Auto-packages the named skill directory into a ZIP and uploads it to the
+      # OpenClacky cloud. No file picker is required — the server finds the skill
+      # directory, zips it, and streams the ZIP to the cloud API.
+      #
+      # Response: { ok: true, name: } on success, { ok: false, error: } on failure.
+      private def api_publish_my_skill(name, req, res)
+        brand = Clacky::BrandConfig.load
+
+        unless brand.user_licensed?
+          json_response(res, 403, { ok: false, error: "User license required to publish skills" })
+          return
+        end
+
+        # Reload skills to ensure we have latest state
+        @skill_loader.load_all
+        skill = @skill_loader[name]
+
+        unless skill
+          json_response(res, 404, { ok: false, error: "Skill '#{name}' not found" })
+          return
+        end
+
+        source = @skill_loader.loaded_from[name]
+        # Only allow publishing user-owned custom skills.
+        # :default  — built-in gem skills (lib/clacky/default_skills/)
+        # :brand    — encrypted brand/system skills from ~/.clacky/brand_skills/ (cannot re-upload)
+        if source == :default || source == :brand
+          json_response(res, 422, { ok: false, error: "Built-in system skills cannot be published" })
+          return
+        end
+
+        skill_dir = skill.directory.to_s
+
+        unless Dir.exist?(skill_dir)
+          json_response(res, 422, { ok: false, error: "Skill directory not found: #{skill_dir}" })
+          return
+        end
+
+        # Parse ?force=true query parameter for overwrite (re-upload existing skill via PATCH)
+        query = URI.decode_www_form(req.query_string.to_s).to_h
+        force = query["force"] == "true"
+
+        begin
+          require "zip"
+          require "tmpdir"
+
+          # Build ZIP in memory / temp file
+          tmp_dir  = Dir.mktmpdir("clacky_skill_publish_")
+          zip_path = File.join(tmp_dir, "#{name}.zip")
+
+          # Directories and file patterns to exclude from the published ZIP.
+          # These are generated/binary files that would cause server-side errors
+          # (e.g., Python .pyc files contain null bytes rejected by PostgreSQL).
+          excluded_dirs     = %w[__pycache__ .git .svn node_modules .cache]
+          excluded_patterns = /\.(pyc|rbc|class|o|so|dylib|dll|exe)$|\.DS_Store$|Thumbs\.db$/i
+
+          Zip::OutputStream.open(zip_path) do |zos|
+            Dir.glob("**/*", base: skill_dir).sort.each do |rel|
+              full = File.join(skill_dir, rel)
+              next if File.directory?(full)
+
+              # Skip excluded directories anywhere in path
+              path_parts = rel.split(File::SEPARATOR)
+              next if path_parts.any? { |part| excluded_dirs.include?(part) }
+
+              # Skip excluded file patterns (compiled bytecode, shared libs, OS files)
+              next if rel.match?(excluded_patterns)
+
+              entry_name = "#{name}/#{rel}"
+              zos.put_next_entry(entry_name)
+              zos.write(File.binread(full))
+            end
+          end
+
+          zip_data = File.binread(zip_path)
+
+          # Upload to cloud API as multipart (force=true uses PATCH for overwrite)
+          result = brand.upload_skill!(name, zip_data, force: force)
+
+          if result[:success]
+            json_response(res, 200, { ok: true, name: name })
+          else
+            # Pass already_exists flag so the frontend can offer an overwrite prompt
+            json_response(res, 422, {
+              ok:             false,
+              error:          result[:error],
+              already_exists: result[:already_exists] || false
+            })
+          end
+        rescue StandardError, ScriptError => e
+          json_response(res, 500, { ok: false, error: e.message })
+        ensure
+          FileUtils.rm_rf(tmp_dir) if tmp_dir && Dir.exist?(tmp_dir)
+        end
       end
 
       # ── Config API ────────────────────────────────────────────────────────────
@@ -1315,6 +1444,54 @@ module Clacky
         JSON.parse(req.body)
       rescue JSON::ParserError
         {}
+      end
+
+      # Parse a multipart/form-data request body to extract a single file upload.
+      # Returns { filename:, data: } or nil when the field is not found.
+      # This is a lightweight parser that handles the standard WEBrick multipart format.
+      #
+      # @param req [WEBrick::HTTPRequest]
+      # @param field_name [String] The form field name to look for
+      # @return [Hash, nil] { filename: String, data: String (binary) }
+      private def parse_multipart_upload(req, field_name)
+        content_type = req["Content-Type"].to_s
+        return nil unless content_type.include?("multipart/form-data")
+
+        # Extract boundary from Content-Type header
+        boundary_match = content_type.match(/boundary=([^\s;]+)/)
+        return nil unless boundary_match
+
+        boundary = "--" + boundary_match[1].strip.gsub(/^"(.*)"$/, '')
+        body     = req.body.to_s.b  # treat as binary
+
+        # Split body by boundary and find the target field
+        parts = body.split(Regexp.new(Regexp.escape(boundary)))
+        parts.each do |part|
+          # Each part has headers, then blank line, then body
+          # Use \r\n\r\n or \n\n as separator between headers and body
+          header_body_sep = part.index("\r\n\r\n") || part.index("\n\n")
+          next unless header_body_sep
+
+          sep_len     = part[header_body_sep, 4] == "\r\n\r\n" ? 4 : 2
+          raw_headers = part[0, header_body_sep]
+          raw_body    = part[(header_body_sep + sep_len)..]
+
+          # Remove trailing CRLF from part body
+          raw_body = raw_body.sub(/\r\n\z/, "").sub(/\n\z/, "")
+
+          # Check Content-Disposition for our field name
+          next unless raw_headers.include?("Content-Disposition")
+
+          name_match = raw_headers.match(/name="([^"]+)"/)
+          next unless name_match && name_match[1] == field_name
+
+          file_match = raw_headers.match(/filename="([^"]*)"/)
+          filename   = file_match ? file_match[1] : field_name
+
+          return { filename: filename, data: raw_body }
+        end
+
+        nil
       end
 
       def not_found(res)
