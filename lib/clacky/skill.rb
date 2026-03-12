@@ -44,11 +44,15 @@ module Clacky
     #   SKILL.md.enc file via BrandConfig#decrypt_skill_content at invoke time.
     #   The on-disk file is never read as plain text.
     # @param brand_config [BrandConfig, nil] Required when brand_skill is true.
-    def initialize(directory, source_path: nil, brand_skill: false, brand_config: nil)
-      @directory   = Pathname.new(directory)
-      @source_path = source_path ? Pathname.new(source_path) : @directory
-      @brand_skill = brand_skill
-      @brand_config = brand_config
+    # @param cached_metadata [Hash, nil] Pre-loaded name/description from brand_skills.json.
+    #   When provided for brand skills, avoids decrypting the file at load time.
+    #   Expected keys: "name", "description".
+    def initialize(directory, source_path: nil, brand_skill: false, brand_config: nil, cached_metadata: nil)
+      @directory       = Pathname.new(directory)
+      @source_path     = source_path ? Pathname.new(source_path) : @directory
+      @brand_skill     = brand_skill
+      @brand_config    = brand_config
+      @cached_metadata = cached_metadata
 
       load_skill
     end
@@ -277,10 +281,10 @@ module Clacky
 
     # Load a brand (encrypted) skill from SKILL.md.enc.
     #
-    # Only the frontmatter is parsed at load time so the agent can build the
-    # skill list (name, description) without decrypting the full content.
-    # The body is decrypted lazily via #decrypted_content when the skill is
-    # actually invoked.
+    # When cached_metadata is provided (name + description from brand_skills.json),
+    # we skip decryption entirely at load time — no network request needed.
+    # The full content is decrypted lazily via #decrypted_content when the skill
+    # is actually invoked.
     private def load_brand_skill
       enc_file = @directory.join("SKILL.md.enc")
 
@@ -290,8 +294,18 @@ module Clacky
 
       raise "brand_config is required to load brand skill" unless @brand_config
 
-      # Decrypt once at load time to parse frontmatter; the result is kept only
-      # in memory and discarded after this method returns.
+      # Fast path: use cached metadata from brand_skills.json — no decryption, no network.
+      if @cached_metadata
+        @frontmatter = {}
+        @name        = @cached_metadata["name"]
+        @description = @cached_metadata["description"]
+        @content     = nil
+        return
+      end
+
+      # Slow path (fallback): decrypt to parse frontmatter.
+      # This runs only when brand_skills.json metadata is unavailable (e.g. first
+      # install before record_installed_skill has run, or manual skill placement).
       raw = @brand_config.decrypt_skill_content(enc_file.to_s)
 
       if raw.start_with?("---")

@@ -35,7 +35,6 @@ module Clacky
       @errors = []            # Store loading errors
       @loaded_from = {}       # Track which location each skill was loaded from
 
-      # Automatically load all skills on initialization
       load_all
     end
 
@@ -69,6 +68,10 @@ module Clacky
       brand_skills_dir = Pathname.new(@brand_config.brand_skills_dir)
       return [] unless brand_skills_dir.exist?
 
+      # Read brand_skills.json once — provides cached name/description so we
+      # can skip decrypting each skill's .enc file just to read its frontmatter.
+      installed_metadata = @brand_config.installed_brand_skills
+
       skills = []
       brand_skills_dir.children.select(&:directory?).each do |skill_dir|
         # Support both encrypted (.enc) and plain brand skills
@@ -76,8 +79,9 @@ module Clacky
         plain     = skill_dir.join("SKILL.md").exist?
         next unless encrypted || plain
 
-        skill_name = skill_dir.basename.to_s
-        skill = load_single_brand_skill(skill_dir, skill_name, encrypted: encrypted)
+        skill_name      = skill_dir.basename.to_s
+        cached_metadata = encrypted ? installed_metadata[skill_name] : nil
+        skill = load_single_brand_skill(skill_dir, skill_name, encrypted: encrypted, cached_metadata: cached_metadata)
         skills << skill if skill
       end
       skills
@@ -320,13 +324,16 @@ module Clacky
     # @param skill_dir [Pathname] Directory containing the skill file
     # @param skill_name [String] Directory basename used as fallback identifier
     # @param encrypted [Boolean] Whether to treat this as an encrypted brand skill
+    # @param cached_metadata [Hash, nil] Pre-loaded name/description from brand_skills.json.
+    #   When provided, Skill.new skips decrypting the .enc file to read frontmatter.
     # @return [Skill, nil]
-    private def load_single_brand_skill(skill_dir, skill_name, encrypted: true)
+    private def load_single_brand_skill(skill_dir, skill_name, encrypted: true, cached_metadata: nil)
       skill = Skill.new(
         skill_dir,
-        source_path:  skill_dir,
-        brand_skill:  encrypted,
-        brand_config: encrypted ? @brand_config : nil
+        source_path:     skill_dir,
+        brand_skill:     encrypted,
+        brand_config:    encrypted ? @brand_config : nil,
+        cached_metadata: cached_metadata
       )
 
       existing = @skills[skill.identifier]
