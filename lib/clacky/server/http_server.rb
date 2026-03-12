@@ -5,6 +5,7 @@ require "websocket/driver"
 require "json"
 require "thread"
 require "fileutils"
+require "tmpdir"
 require "uri"
 require "open3"
 require_relative "session_registry"
@@ -122,7 +123,7 @@ module Clacky
 
         # Kill any previous server on the same port, then write our own PID file
         kill_existing_server(@port)
-        pid_file = "/tmp/clacky-server-#{@port}.pid"
+        pid_file = File.join(Dir.tmpdir, "clacky-server-#{@port}.pid")
         File.write(pid_file, Process.pid.to_s)
         at_exit { File.delete(pid_file) if File.exist?(pid_file) }
 
@@ -1510,7 +1511,7 @@ module Clacky
 
       # Stop any previously running server on the given port via its PID file.
       private def kill_existing_server(port)
-        pid_file = "/tmp/clacky-server-#{port}.pid"
+        pid_file = File.join(Dir.tmpdir, "clacky-server-#{port}.pid")
         return unless File.exist?(pid_file)
 
         pid = File.read(pid_file).strip.to_i
