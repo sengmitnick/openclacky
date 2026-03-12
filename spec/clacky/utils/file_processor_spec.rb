@@ -49,12 +49,23 @@ RSpec.describe Clacky::Utils::FileProcessor do
     it "raises error for file too large" do
       Dir.mktmpdir do |dir|
         large_file = File.join(dir, "large.png")
-        # Create a file larger than MAX_FILE_SIZE
-        File.binwrite(large_file, "\x89PNG\r\n\x1a\n".b + "x" * (6 * 1024 * 1024))
+        # Create a file larger than MAX_FILE_SIZE (512KB)
+        File.binwrite(large_file, "\x89PNG\r\n\x1a\n".b + "x" * (513 * 1024))
 
         expect {
           described_class.image_path_to_data_url(large_file)
         }.to raise_error(ArgumentError, /File too large/)
+      end
+    end
+
+    it "accepts file within size limit" do
+      Dir.mktmpdir do |dir|
+        small_file = File.join(dir, "small.png")
+        File.binwrite(small_file, "\x89PNG\r\n\x1a\n".b + "x" * (511 * 1024))
+
+        expect {
+          described_class.image_path_to_data_url(small_file)
+        }.not_to raise_error
       end
     end
   end
@@ -93,11 +104,23 @@ RSpec.describe Clacky::Utils::FileProcessor do
     it "raises error for file too large" do
       Dir.mktmpdir do |dir|
         large_file = File.join(dir, "large.pdf")
-        File.binwrite(large_file, "%PDF".b + "x" * (6 * 1024 * 1024))
+        # Create a file larger than MAX_FILE_SIZE (512KB)
+        File.binwrite(large_file, "%PDF".b + "x" * (513 * 1024))
 
         expect {
           described_class.file_to_base64(large_file)
         }.to raise_error(ArgumentError, /File too large/)
+      end
+    end
+
+    it "accepts file within size limit" do
+      Dir.mktmpdir do |dir|
+        small_file = File.join(dir, "small.pdf")
+        File.binwrite(small_file, "%PDF".b + "x" * (511 * 1024))
+
+        expect {
+          described_class.file_to_base64(small_file)
+        }.not_to raise_error
       end
     end
   end

@@ -6,8 +6,8 @@ module Clacky
   module Utils
     # File processing utilities for binary files, images, and PDFs
     class FileProcessor
-      # Maximum file size for binary files (5MB)
-      MAX_FILE_SIZE = 5 * 1024 * 1024
+      # Maximum file size for binary files (512KB) - binary files are base64-encoded and consume significant tokens
+      MAX_FILE_SIZE = 512 * 1024
 
       # Supported image formats
       IMAGE_FORMATS = {

@@ -190,7 +190,7 @@ module Clacky
 
           # Check if it has base64 data (LLM-compatible format)
           if result[:base64_data] || result['base64_data']
-            size_warning = size > 5_000_000 ? " (WARNING: large file)" : ""
+            size_warning = size > Utils::FileProcessor::MAX_FILE_SIZE ? " (WARNING: large file)" : ""
             return "Binary file (#{format_type}, #{format_file_size(size)}) - sent to LLM#{size_warning}"
           else
             return "Binary file (#{format_type}, #{format_file_size(size)}) - cannot be read as text"
@@ -212,8 +212,8 @@ module Clacky
           description = "File: #{result[:path]}\nType: #{result[:format]}\nSize: #{format_file_size(result[:size_bytes])}"
 
           # Add size warning for large files
-          if result[:size_bytes] > 5_000_000
-            description += "\nWARNING: Large file (>5MB) - may consume significant tokens"
+          if result[:size_bytes] > Utils::FileProcessor::MAX_FILE_SIZE
+            description += "\nWARNING: Large file (>#{Utils::FileProcessor::MAX_FILE_SIZE / 1024}KB) - may consume significant tokens"
           end
 
           # For images, return both description and image content
