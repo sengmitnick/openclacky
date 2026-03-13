@@ -36,6 +36,8 @@ module Clacky
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
                 :status, :error, :updated_at
 
+    def permission_mode = @config&.permission_mode&.to_s || ""
+
     def initialize(client, config, working_dir:, ui:, profile:, session_id:)
       @client = client  # Client for current model
       @config = config.is_a?(AgentConfig) ? config : AgentConfig.new(config)
