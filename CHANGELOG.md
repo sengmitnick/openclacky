@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-03-13
+
+### Added
+- **Markdown rendering in WebUI chat**: assistant responses are now rendered as rich markdown — headings, bold, code blocks, lists, and inline code are all formatted properly instead of displayed as raw text
+- **Session naming with auto-name and inline rename**: sessions are automatically named after the first exchange; users can double-click any session in the sidebar to rename it inline
+- **Session info bar with live status animation**: a slim bar below the chat header shows the session name, working directory, and a pulsing animation while the agent is thinking or executing tools
+- **Restore last 5 sessions on startup**: the WebUI now reopens the five most recent sessions on startup instead of just the last one
+- **Image and file support for Feishu and WeCom**: users can now send images and file attachments through Feishu and WeCom IM channels; the agent reads and processes them like any other input
+- **Idle compression in WebUI**: the agent now compresses long conversation history automatically when the session has been idle, keeping context efficient without manual intervention
+
+### Improved
+- **Onboard flow**: soul setup is now non-blocking; the confirmation page is skipped for a faster first-run experience; onboard now asks the user to name the AI first, then collects the user profile
+- **Token usage display ordering**: the token usage line in WebUI now always appears below the assistant message bubble, not above it
+
+### Fixed
+- **Token usage line disappears after page refresh**: token usage data is now persisted in session history and correctly re-rendered when the page is reloaded
+- **Shell tool hangs on background commands**: commands containing `&` (background operator) no longer cause the shell tool to block indefinitely
+- **White flash on page load**: the page is now hidden until boot completes, preventing a flash of unstyled content or the wrong view on startup
+- **Theme flash on refresh**: the theme (dark/light) is now initialized inline in `<head>` so the correct colours are applied before any content renders
+- **Onboard flash on reload**: the onboard panel no longer briefly appears when a session already exists during soul setup
+
+### More
+- Rename channels "Test" button to "Diagnostics" for clarity
+- Default-highlight the first item in skill autocomplete
+
 ## [0.8.8] - 2026-03-13
 
 ### Added
