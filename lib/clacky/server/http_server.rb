@@ -687,10 +687,38 @@ module Clacky
         latest
       end
 
-      # Query the latest openclacky version via `gem list -r openclacky`.
-      # Runs through login shell so gem source mirrors configured via rbenv/mise work correctly.
-      # Output format: "openclacky (0.9.0)"
+      # Query the latest openclacky version.
+      # Strategy: try RubyGems official REST API first (most accurate, not affected by mirror lag),
+      # then fall back to `gem list -r` (respects user's configured gem source).
       private def fetch_latest_version_from_gem
+        fetch_latest_version_from_rubygems_api || fetch_latest_version_from_gem_command
+      end
+
+      # Try RubyGems official REST API — fast and always up-to-date.
+      # Returns nil if the request fails or times out.
+      private def fetch_latest_version_from_rubygems_api
+        require "net/http"
+        require "json"
+
+        uri      = URI("https://rubygems.org/api/v1/gems/openclacky.json")
+        http     = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl     = true
+        http.open_timeout = 5
+        http.read_timeout = 8
+
+        res = http.get(uri.request_uri)
+        return nil unless res.is_a?(Net::HTTPSuccess)
+
+        data = JSON.parse(res.body)
+        data["version"].to_s.strip.then { |v| v.empty? ? nil : v }
+      rescue StandardError
+        nil
+      end
+
+      # Fall back to `gem list -r openclacky` via login shell.
+      # Respects the user's configured gem source (rbenv/mise mirrors, etc.).
+      # Output format: "openclacky (0.9.0)"
+      private def fetch_latest_version_from_gem_command
         shell  = Clacky::Tools::Shell.new
         result = shell.execute(command: "gem list -r openclacky", soft_timeout: 15, hard_timeout: 30)
         return nil unless result[:exit_code] == 0
