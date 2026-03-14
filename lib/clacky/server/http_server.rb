@@ -1472,8 +1472,10 @@ module Clacky
         end
         content = [content, *file_refs].join("\n") unless file_refs.empty?
 
-        # Auto-name the session from the first user message (before agent starts running)
-        if agent.name.empty? && agent.messages.empty?
+        # Auto-name the session from the first user message (before agent starts running).
+        # Check messages.empty? only — agent.name may already hold a default placeholder
+        # like "Session 1" assigned at creation time, so it's not a reliable signal.
+        if agent.messages.empty?
           auto_name = content.gsub(/\s+/, " ").strip[0, 30]
           auto_name += "…" if content.strip.length > 30
           agent.rename(auto_name)
