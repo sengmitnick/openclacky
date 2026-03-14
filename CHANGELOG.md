@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-03-15
+
+### Added
+- **Session context auto-injection**: the agent now automatically injects the current date and active model name into each conversation turn, so it always knows what day it is and which model it's running — helpful for time-sensitive tasks and multi-model setups
+- **Kimi/Moonshot extended thinking support**: reasoning content is now preserved and echoed back correctly in message history, fixing HTTP 400 errors when using Kimi's extended thinking API
+
+### Improved
+- **Browser tool install UX**: the `agent-browser` setup flow has been redesigned with a dedicated install script and clearer guidance, making first-time setup smoother
+
 ## [0.9.0] - 2026-03-14
 
 ### Added
