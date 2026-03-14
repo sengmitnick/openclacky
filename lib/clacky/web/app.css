@@ -3060,3 +3060,133 @@ body {
   border: 1px dashed var(--color-border-primary);
   border-radius: 8px;
 }
+
+/* ── Version badge (sidebar-footer) ─────────────────────────────────────── */
+.version-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 15px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background .15s;
+  margin-top: 2px;
+}
+.version-badge:hover { background: var(--color-bg-hover); }
+
+.version-text {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-family: monospace;
+  letter-spacing: 0.03em;
+  transition: color .15s;
+}
+.version-badge:hover .version-text { color: var(--color-text-secondary); }
+
+.version-update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-warning);
+  flex-shrink: 0;
+  box-shadow: 0 0 4px var(--color-warning);
+  animation: version-pulse 2s ease-in-out infinite;
+}
+@keyframes version-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* ── Upgrade modal ───────────────────────────────────────────────────────── */
+.upgrade-modal-box {
+  max-width: 560px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+}
+
+.upgrade-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.upgrade-modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.upgrade-modal-close {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background .15s, color .15s;
+}
+.upgrade-modal-close:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+
+.upgrade-version-info {
+  font-size: 13px;
+  font-family: monospace;
+  color: var(--color-accent-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.upgrade-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: 4px;
+}
+
+/* Upgrade log (scrollable terminal output) */
+.upgrade-log {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 12px;
+  font-family: monospace;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  max-height: 280px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+/* Reconnect state */
+.upgrade-state-reconnect,
+#upgrade-state-reconnect {
+  text-align: center;
+  padding: 24px 0;
+}
+
+.upgrade-reconnect-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--color-border-primary);
+  border-top-color: var(--color-accent-primary);
+  border-radius: 50%;
+  animation: upgrade-spin .7s linear infinite;
+  margin: 0 auto 16px;
+}
+@keyframes upgrade-spin {
+  to { transform: rotate(360deg); }
+}
+
+.upgrade-reconnect-msg {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}

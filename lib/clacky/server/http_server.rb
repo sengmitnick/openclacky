@@ -135,6 +135,12 @@ module Clacky
         @session_manager = Clacky::SessionManager.new
         @ws_clients      = {}  # session_id => [WebSocketConnection, ...]
         @ws_mutex        = Mutex.new
+        # Version cache: { latest: "x.y.z", checked_at: Time }
+        @version_cache   = nil
+        @version_mutex   = Mutex.new
+        # Version cache: { latest: "x.y.z", checked_at: Time }
+        @version_cache   = nil
+        @version_mutex   = Mutex.new
         @scheduler       = Scheduler.new(
           session_registry: @registry,
           session_builder:  method(:build_session)
@@ -264,6 +270,10 @@ module Clacky
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         when ["GET",    "/api/channels"]          then api_list_channels(res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
+        when ["GET",    "/api/version"]           then api_get_version(res)
+        when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
+        when ["GET",    "/api/version"]           then api_get_version(res)
+        when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
         else
           if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
@@ -589,6 +599,99 @@ module Clacky
       def api_brand_info(res)
         brand = Clacky::BrandConfig.load
         json_response(res, 200, brand.to_h)
+      end
+
+      # ── Version API ───────────────────────────────────────────────────────────
+
+      # GET /api/version
+      # Returns current version and latest version from RubyGems (cached for 1 hour).
+      def api_get_version(res)
+        current = Clacky::VERSION
+        latest  = fetch_latest_version_cached
+        json_response(res, 200, {
+          current:      current,
+          latest:       latest,
+          needs_update: latest ? version_older?(current, latest) : false
+        })
+      end
+
+      # POST /api/version/upgrade
+      # Runs `gem update openclacky --no-document` via Clacky::Tools::Shell (login shell)
+      # in a background thread, streaming output via WebSocket broadcast.
+      # On success, re-execs the process so the new gem version is loaded.
+      def api_upgrade_version(req, res)
+        json_response(res, 202, { ok: true, message: "Upgrade started" })
+
+        Thread.new do
+          begin
+            broadcast_all(type: "upgrade_log", line: "Starting upgrade: gem update openclacky --no-document\n")
+
+            shell  = Clacky::Tools::Shell.new
+            result = shell.execute(command: "gem update openclacky --no-document",
+                                   soft_timeout: 300, hard_timeout: 600)
+            output  = [result[:stdout], result[:stderr]].join
+            success = result[:exit_code] == 0
+
+            broadcast_all(type: "upgrade_log", line: output)
+
+            if success
+              broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Restarting server...\n")
+              broadcast_all(type: "upgrade_complete", success: true)
+              sleep 1.5  # Give frontend time to receive the event before restart
+              # Re-exec the current process so the new gem version is loaded.
+              # $0 is the original executable path, ARGV are the original arguments.
+              exec($0, *ARGV)
+            else
+              broadcast_all(type: "upgrade_log", line: "\n✗ Upgrade failed. Please try manually: gem update openclacky\n")
+              broadcast_all(type: "upgrade_complete", success: false)
+            end
+          rescue StandardError => e
+            broadcast_all(type: "upgrade_log", line: "\n✗ Error during upgrade: #{e.message}\n")
+            broadcast_all(type: "upgrade_complete", success: false)
+          end
+        end
+      end
+
+      # Fetch the latest gem version using `gem list -r`, with a 1-hour in-memory cache.
+      # Uses Clacky::Tools::Shell (login shell) so rbenv/mise shims and gem mirrors work correctly.
+      private def fetch_latest_version_cached
+        @version_mutex.synchronize do
+          now = Time.now
+          if @version_cache && (now - @version_cache[:checked_at]) < 3600
+            return @version_cache[:latest]
+          end
+        end
+
+        # Fetch outside the mutex to avoid blocking other requests
+        latest = fetch_latest_version_from_gem
+
+        @version_mutex.synchronize do
+          @version_cache = { latest: latest, checked_at: Time.now }
+        end
+
+        latest
+      end
+
+      # Query the latest openclacky version via `gem list -r openclacky`.
+      # Runs through login shell so gem source mirrors configured via rbenv/mise work correctly.
+      # Output format: "openclacky (0.9.0)"
+      private def fetch_latest_version_from_gem
+        shell  = Clacky::Tools::Shell.new
+        result = shell.execute(command: "gem list -r openclacky", soft_timeout: 15, hard_timeout: 30)
+        return nil unless result[:exit_code] == 0
+
+        out   = result[:stdout].to_s
+        match = out.match(/^openclacky\s+\(([^)]+)\)/)
+        match ? match[1].strip : nil
+      rescue StandardError
+        nil
+      end
+
+      # Returns true if version string `a` is strictly older than `b`.
+      private def version_older?(a, b)
+        Gem::Version.new(a) < Gem::Version.new(b)
+      rescue ArgumentError
+        false
       end
 
       # ── Channel API ───────────────────────────────────────────────────────────
