@@ -11,7 +11,7 @@ module Clacky
     INTERNAL_FIELDS = %i[
       task_id created_at system_injected session_context memory_update
       subagent_instructions subagent_result token_usage reasoning_content
-      compressed_summary chunk_path truncated
+      compressed_summary chunk_path truncated transient
     ].freeze
 
     def initialize(messages = [])
@@ -166,10 +166,12 @@ module Clacky
       result.map { |m| strip_internal_fields(m) }
     end
 
-    # Return a shallow copy of the full internal message list.
+    # Return a shallow copy of the message list, excluding transient messages.
+    # Transient messages (e.g. brand skill instructions) are valid during the
+    # current session but must not be persisted to session.json.
     # For serialization, compression, and cloning.
     def to_a
-      @messages.dup
+      @messages.reject { |m| m[:transient] }.dup
     end
 
     private def strip_internal_fields(message)

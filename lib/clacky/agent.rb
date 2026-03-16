@@ -161,7 +161,6 @@ module Clacky
       # across tasks to correctly calculate delta tokens in each iteration
       @task_start_iterations = @iterations  # Track starting iterations for this task
       @task_start_cost = @total_cost  # Track starting cost for this task
-
       # Track cache stats for current task
       @task_cache_stats = {
         cache_creation_input_tokens: 0,
@@ -292,7 +291,7 @@ module Clacky
         @modified_files_in_task = []  # Reset for next task
       end
         if @is_subagent
-          @ui&.show_info("Subagent done (#{result[:iterations]} iterations, $#{result[:total_cost_usd].round(4)})")
+          # Parent agent (skill_manager) prints the completion summary; skip here.
         else
           @ui&.show_complete(
             iterations: result[:iterations],

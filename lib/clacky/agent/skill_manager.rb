@@ -155,9 +155,8 @@ module Clacky
         skill = parsed[:skill]
         arguments = parsed[:arguments]
 
-        # Encrypted brand skills and fork-agent skills must run in an isolated subagent.
-        # Injecting their plaintext into @messages would expose confidential content to the LLM.
-        if skill.encrypted? || skill.fork_agent?
+        # fork_agent skills still run in an isolated subagent.
+        if skill.fork_agent?
           execute_skill_with_subagent(skill, arguments)
           return
         end
@@ -173,22 +172,30 @@ module Clacky
         # real LLM call would find an assistant message at the tail of the history,
         # causing a 400 "invalid message order" error.
         #
+        # For encrypted (brand) skills, both injected messages are marked transient: true
+        # so they are excluded from session.json serialization. The LLM sees the content
+        # during the current session, but it is never persisted to disk.
+        #
         # Final message order:
         #   user:      "/skill-name [args]"          ← real user input
         #   assistant: "[expanded skill content]"    ← system_injected (skill instructions)
         #   user:      "[SYSTEM] Please proceed..."  ← system_injected (Claude compat shim)
+        transient = skill.encrypted?
+
         @history.append({
           role: "assistant",
           content: expanded_content,
           task_id: task_id,
-          system_injected: true
+          system_injected: true,
+          transient: transient
         })
 
         @history.append({
           role: "user",
           content: "[SYSTEM] The skill instructions above have been loaded. Please proceed to execute the task now.",
           task_id: task_id,
-          system_injected: true
+          system_injected: true,
+          transient: transient
         })
 
         @ui&.show_info("Injected skill content for /#{skill.identifier}")
