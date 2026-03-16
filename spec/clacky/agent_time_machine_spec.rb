@@ -336,14 +336,14 @@ RSpec.describe "Clacky::Agent TimeMachine" do
 
   describe "#active_messages" do
     before do
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "user", content: "Task 1", task_id: 1 },
         { role: "assistant", content: "Response 1", task_id: 1 },
         { role: "user", content: "Task 2", task_id: 2 },
         { role: "assistant", content: "Response 2", task_id: 2 },
         { role: "user", content: "Task 3", task_id: 3 },
         { role: "assistant", content: "Response 3", task_id: 3 }
-      ])
+      ]))
       
       agent.instance_variable_set(:@current_task_id, 3)
       agent.instance_variable_set(:@active_task_id, 3)
@@ -359,11 +359,17 @@ RSpec.describe "Clacky::Agent TimeMachine" do
       messages = agent.active_messages
       
       expect(messages.length).to eq(2)
-      expect(messages.last[:task_id]).to eq(1)
+      # active_messages returns API-ready format (internal fields stripped),
+      # so verify content instead of task_id
+      expect(messages.last[:content]).to eq("Response 1")
     end
 
     it "includes system messages without task_id" do
-      agent.instance_variable_get(:@messages).unshift({ role: "system", content: "You are an AI" })
+      agent.history.append({ role: "system", content: "You are an AI" })
+      # Move the system message to the front by rebuilding history
+      all = agent.history.to_a
+      system_msg = all.pop
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([system_msg] + all))
       agent.instance_variable_set(:@active_task_id, 1)
       
       messages = agent.active_messages

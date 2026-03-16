@@ -53,7 +53,7 @@ RSpec.describe "Agent#restore_session refreshes system prompt" do
       # Before restore, the @messages contain the stale system prompt
       agent.restore_session(session_data)
 
-      system_msg = agent.messages.find { |m| m[:role] == "system" }
+      system_msg = agent.history.to_a.find { |m| m[:role] == "system" }
       expect(system_msg).not_to be_nil
 
       # The stale "old-skill" text should be gone
@@ -71,7 +71,7 @@ RSpec.describe "Agent#restore_session refreshes system prompt" do
 
       agent.restore_session(session_data)
 
-      non_system = agent.messages.reject { |m| m[:role] == "system" }
+      non_system = agent.history.to_a.reject { |m| m[:role] == "system" }
       expect(non_system.map { |m| m[:role] }).to eq(%w[user assistant])
       expect(non_system.first[:content]).to eq("Hello")
     end
@@ -84,7 +84,7 @@ RSpec.describe "Agent#restore_session refreshes system prompt" do
 
       agent.restore_session(session_data)
 
-      system_messages = agent.messages.select { |m| m[:role] == "system" }
+      system_messages = agent.history.to_a.select { |m| m[:role] == "system" }
       expect(system_messages.size).to eq(1)
     end
   end

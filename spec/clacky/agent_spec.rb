@@ -142,8 +142,7 @@ RSpec.describe Clacky::Agent do
       agent.send(:observe, response, tool_results)
 
       # Get the messages
-      messages = agent.instance_variable_get(:@messages)
-      tool_messages = messages.select { |m| m[:role] == "tool" }
+      tool_messages = agent.history.to_a.select { |m| m[:role] == "tool" }
 
       # Verify the order matches the original tool_calls order
       expect(tool_messages.size).to eq(3)
@@ -187,8 +186,7 @@ RSpec.describe Clacky::Agent do
 
       agent.send(:observe, response, tool_results)
 
-      messages = agent.instance_variable_get(:@messages)
-      tool_messages = messages.select { |m| m[:role] == "tool" }
+      tool_messages = agent.history.to_a.select { |m| m[:role] == "tool" }
 
       expect(tool_messages.size).to eq(2)
       expect(tool_messages[0][:tool_call_id]).to eq("call_1")
@@ -401,17 +399,16 @@ RSpec.describe Clacky::Agent do
       # Add messages with enough content to exceed 80K token threshold
       # Each message needs ~1600 chars to reach ~400 tokens (4 chars/token)
       # 200 messages × 400 tokens = 80K tokens
-      messages = compression_agent.instance_variable_get(:@messages)
-      messages << { role: "system", content: "System prompt" }
+      compression_agent.history.append({ role: "system", content: "System prompt" })
 
       200.times do |i|
         # Create longer messages to reach token threshold
         long_content = "This is a detailed message number #{i}. " * 100
-        messages << { role: "user", content: long_content }
-        messages << { role: "assistant", content: "Response #{i}: " + "Detailed response " * 100 }
+        compression_agent.history.append({ role: "user", content: long_content })
+        compression_agent.history.append({ role: "assistant", content: "Response #{i}: " + "Detailed response " * 100 })
       end
 
-      initial_count = messages.size
+      initial_count = compression_agent.history.size
       initial_tokens = compression_agent.send(:total_message_tokens)[:total]
 
       # Verify we have enough tokens to trigger compression
@@ -424,7 +421,7 @@ RSpec.describe Clacky::Agent do
       # Call think which will trigger and handle compression automatically
       compression_agent.send(:think)
 
-      final_count = compression_agent.instance_variable_get(:@messages).size
+      final_count = compression_agent.history.size
       final_tokens = compression_agent.send(:total_message_tokens)[:total]
 
       expect(final_count).to be < initial_count
@@ -437,18 +434,17 @@ RSpec.describe Clacky::Agent do
       allow(client).to receive(:send_messages_with_tools)
         .and_return(mock_api_response(content: "done"))
 
-      messages = compression_agent.instance_variable_get(:@messages)
-      messages << { role: "system", content: "Important system prompt" }
+      compression_agent.history.append({ role: "system", content: "Important system prompt" })
 
       # Add enough content to exceed token threshold
       100.times do |i|
         long_content = "Detailed conversation message #{i}. " * 80
-        messages << { role: "user", content: long_content }
-        messages << { role: "assistant", content: "Response #{i}: " + "Detailed answer " * 80 }
+        compression_agent.history.append({ role: "user", content: long_content })
+        compression_agent.history.append({ role: "assistant", content: "Response #{i}: " + "Detailed answer " * 80 })
       end
 
       compression_agent.send(:compress_messages_if_needed)
-      compressed_messages = compression_agent.instance_variable_get(:@messages)
+      compressed_messages = compression_agent.history.to_a
 
       system_msg = compressed_messages.find { |m| m[:role] == "system" }
       expect(system_msg).not_to be_nil
@@ -463,18 +459,16 @@ RSpec.describe Clacky::Agent do
       )
       no_compression_agent = described_class.new(client, no_compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id)
 
-      messages = no_compression_agent.instance_variable_get(:@messages)
-
       # Add many messages (enough to normally trigger compression)
       100.times do |i|
         long_content = "Detailed message #{i}. " * 80
-        messages << { role: "user", content: long_content }
-        messages << { role: "assistant", content: "Response #{i}: " + "Answer " * 80 }
+        no_compression_agent.history.append({ role: "user", content: long_content })
+        no_compression_agent.history.append({ role: "assistant", content: "Response #{i}: " + "Answer " * 80 })
       end
 
-      initial_count = messages.size
+      initial_count = no_compression_agent.history.size
       no_compression_agent.send(:compress_messages_if_needed)
-      final_count = no_compression_agent.instance_variable_get(:@messages).size
+      final_count = no_compression_agent.history.size
 
       expect(final_count).to eq(initial_count) # No compression when disabled
     end
@@ -483,35 +477,34 @@ RSpec.describe Clacky::Agent do
       allow(client).to receive(:send_messages_with_tools)
         .and_return(mock_api_response(content: "done"))
 
-      messages = compression_agent.instance_variable_get(:@messages)
-      messages << { role: "system", content: "System" }
+      compression_agent.history.append({ role: "system", content: "System" })
 
       # Add many messages to trigger compression (need token threshold)
       100.times do |i|
         long_content = "Request message #{i}. " * 80
-        messages << { role: "user", content: long_content }
-        messages << { role: "assistant", content: "Response #{i}: " + "Answer " * 80 }
+        compression_agent.history.append({ role: "user", content: long_content })
+        compression_agent.history.append({ role: "assistant", content: "Response #{i}: " + "Answer " * 80 })
       end
 
       # Add a critical scenario: assistant with MULTIPLE tool_calls
-      messages << { role: "user", content: "Do two things" }
-      messages << {
+      compression_agent.history.append({ role: "user", content: "Do two things" })
+      compression_agent.history.append({
         role: "assistant",
         content: nil,
         tool_calls: [
           { id: "call_1", type: "function", function: { name: "tool_a", arguments: "{}" } },
           { id: "call_2", type: "function", function: { name: "tool_b", arguments: "{}" } }
         ]
-      }
+      })
       # Add the two corresponding tool results
-      messages << { role: "tool", tool_call_id: "call_1", content: "Result A" }
-      messages << { role: "tool", tool_call_id: "call_2", content: "Result B" }
+      compression_agent.history.append({ role: "tool", tool_call_id: "call_1", content: "Result A" })
+      compression_agent.history.append({ role: "tool", tool_call_id: "call_2", content: "Result B" })
 
       # Add a final message to be preserved
-      messages << { role: "user", content: "Final request" }
+      compression_agent.history.append({ role: "user", content: "Final request" })
 
       compression_agent.send(:compress_messages_if_needed)
-      compressed = compression_agent.instance_variable_get(:@messages)
+      compressed = compression_agent.history.to_a
 
       # Find the assistant message with multiple tool_calls
       assistant_msg = compressed.find do |m|
@@ -530,19 +523,18 @@ RSpec.describe Clacky::Agent do
     end
 
     it "triggers compression when message count exceeds threshold even if tokens are below threshold" do
-      messages = compression_agent.instance_variable_get(:@messages)
-      messages << { role: "system", content: "System prompt" }
+      compression_agent.history.append({ role: "system", content: "System prompt" })
 
       # Add exactly 100 short messages (token count will be well below 80K threshold)
       # System + 100 user + 100 assistant = 201 messages
       100.times do |i|
         # Short content to keep token count low
         short_content = "Short message #{i}"
-        messages << { role: "user", content: short_content }
-        messages << { role: "assistant", content: "Response #{i}" }
+        compression_agent.history.append({ role: "user", content: short_content })
+        compression_agent.history.append({ role: "assistant", content: "Response #{i}" })
       end
 
-      initial_count = messages.size
+      initial_count = compression_agent.history.size
       initial_tokens = compression_agent.send(:total_message_tokens)[:total]
 
       # Verify token count is below token threshold but message count exceeds 100
@@ -556,7 +548,7 @@ RSpec.describe Clacky::Agent do
       # Call think which will trigger and handle compression automatically
       compression_agent.send(:think)
 
-      final_count = compression_agent.instance_variable_get(:@messages).size
+      final_count = compression_agent.history.size
       final_tokens = compression_agent.send(:total_message_tokens)[:total]
 
       # Compression should have been triggered by message count threshold
@@ -594,7 +586,7 @@ RSpec.describe Clacky::Agent do
       expect(restored_agent.session_id).to eq("test-session-123")
       expect(restored_agent.iterations).to eq(5)
       expect(restored_agent.total_cost).to eq(0.10)
-      expect(restored_agent.messages.size).to eq(3)
+      expect(restored_agent.history.size).to eq(3)
       expect(restored_agent.todos.size).to eq(1)
       expect(restored_agent.working_dir).to eq("/test/dir")
     end
@@ -616,8 +608,8 @@ RSpec.describe Clacky::Agent do
         restored_agent = described_class.from_session(client, config, error_session_data, profile: "coding")
 
         # Should have rolled back the error-causing message
-        expect(restored_agent.messages.size).to eq(3) # system + user + assistant, not the error-causing user message
-        expect(restored_agent.messages.last[:content]).to eq("First response")
+        expect(restored_agent.history.size).to eq(3) # system + user + assistant, not the error-causing user message
+        expect(restored_agent.history.to_a.last[:content]).to eq("First response")
       end
 
       it "triggers session_rollback hook" do
@@ -668,7 +660,7 @@ RSpec.describe Clacky::Agent do
       agent.run("Create a document")
 
       # Should have added a system message about truncation
-      system_messages = agent.messages.select { |m| 
+      system_messages = agent.history.to_a.select { |m| 
         m[:role] == "user" && m[:content]&.include?("[SYSTEM] Your response was truncated")
       }
       expect(system_messages.size).to eq(1)
@@ -688,7 +680,7 @@ RSpec.describe Clacky::Agent do
       expect(result[:status]).to eq(:success)
       
       # Find the assistant message that gave up
-      assistant_messages = agent.messages.select { |m| 
+      assistant_messages = agent.history.to_a.select { |m| 
         m[:role] == "assistant" && m[:content]&.include?("too complex")
       }
       expect(assistant_messages.size).to be >= 1

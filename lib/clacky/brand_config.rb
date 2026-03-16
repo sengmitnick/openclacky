@@ -34,8 +34,10 @@ module Clacky
     CONFIG_DIR  = File.join(Dir.home, ".clacky")
     BRAND_FILE  = File.join(CONFIG_DIR, "brand.yml")
 
-    # OpenClacky Cloud API base URL
-    API_BASE_URL = "https://www.openclacky.com"
+    # OpenClacky Cloud API base URL.
+    # Override with CLACKY_LICENSE_SERVER env var for local development:
+    #   CLACKY_LICENSE_SERVER=http://localhost:3000 bundle exec ruby bin/clacky server
+    API_BASE_URL = ENV.fetch("CLACKY_LICENSE_SERVER", "https://www.openclacky.com")
 
     # How often to send a heartbeat (seconds) — once per day
     HEARTBEAT_INTERVAL = 86_400

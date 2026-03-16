@@ -19,7 +19,7 @@ RSpec.describe "Agent#inject_session_context_if_needed" do
   end
 
   def session_ctx_messages(agent)
-    agent.messages.select { |m| m[:session_context] }
+    agent.history.to_a.select { |m| m[:session_context] }
   end
 
   it "injects a session context message on the first run" do
@@ -34,7 +34,7 @@ RSpec.describe "Agent#inject_session_context_if_needed" do
       msg = ctxs.first
       expect(msg[:role]).to eq("user")
       expect(msg[:system_injected]).to be(true)
-      expect(msg[:context_date]).to eq(Time.now.strftime("%Y-%m-%d"))
+      expect(msg[:session_date]).to eq(Time.now.strftime("%Y-%m-%d"))
       expect(msg[:content]).to include("Today is")
       expect(msg[:content]).to include("Current model:")
     end
@@ -59,13 +59,13 @@ RSpec.describe "Agent#inject_session_context_if_needed" do
       expect(session_ctx_messages(agent).size).to eq(1)
 
       # Simulate crossing midnight: backdate the injected context to yesterday
-      session_ctx_messages(agent).first[:context_date] = "2000-01-01"
+      session_ctx_messages(agent).first[:session_date] = "2000-01-01"
 
       agent.run("day 2 message")
 
       ctxs = session_ctx_messages(agent)
       expect(ctxs.size).to eq(2)
-      expect(ctxs.last[:context_date]).to eq(Time.now.strftime("%Y-%m-%d"))
+      expect(ctxs.last[:session_date]).to eq(Time.now.strftime("%Y-%m-%d"))
     end
   end
 

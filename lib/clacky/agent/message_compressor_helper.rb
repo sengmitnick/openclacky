@@ -24,7 +24,8 @@ module Clacky
         end
 
         # Insert compression message
-        @messages << compression_context[:compression_message]
+        compression_message = compression_context[:compression_message]
+        @history.append(compression_message)
 
         begin
           # Execute compression using shared LLM call logic
@@ -33,13 +34,13 @@ module Clacky
           true
         rescue Clacky::AgentInterrupted => e
           @ui&.log("Idle compression canceled: #{e.message}", level: :info)
-          # Remove the compression message we added
-          @messages.pop if @messages.last == compression_context[:compression_message]
+          @history.pop_while { |m| m[:system_injected] && !m.equal?(compression_message) }
+          @history.pop_last if @history.to_a.last&.equal?(compression_message)
           false
         rescue => e
           @ui&.log("Idle compression failed: #{e.message}", level: :error)
-          # Remove the compression message we added
-          @messages.pop if @messages.last == compression_context[:compression_message]
+          @history.pop_while { |m| m[:system_injected] && !m.equal?(compression_message) }
+          @history.pop_last if @history.to_a.last&.equal?(compression_message)
           false
         end
       end
@@ -53,7 +54,7 @@ module Clacky
 
         # Calculate total tokens and message count
         total_tokens = total_message_tokens[:total]
-        message_count = @messages.length
+        message_count = @history.size
 
         # Force compression (for idle compression) - use lower threshold
         if force
@@ -90,11 +91,12 @@ module Clacky
         @compression_level += 1
 
         # Get the most recent N messages, ensuring tool_calls/tool results pairs are kept together
-        recent_messages = get_recent_messages_with_tool_pairs(@messages, target_recent_count)
+        all_messages = @history.to_a
+        recent_messages = get_recent_messages_with_tool_pairs(all_messages, target_recent_count)
         recent_messages = [] if recent_messages.nil?
 
         # Build compression instruction message (to be inserted into conversation)
-        compression_message = @message_compressor.build_compression_message(@messages, recent_messages: recent_messages)
+        compression_message = @message_compressor.build_compression_message(all_messages, recent_messages: recent_messages)
 
         return nil if compression_message.nil?
 
@@ -103,7 +105,7 @@ module Clacky
           compression_message: compression_message,
           recent_messages: recent_messages,
           original_token_count: total_tokens,
-          original_message_count: @messages.length,
+          original_message_count: @history.size,
           compression_level: @compression_level
         }
       end
@@ -117,7 +119,7 @@ module Clacky
 
         # Rebuild message list with compression
         # Note: we need to remove the compression instruction message we just added
-        original_messages = @messages[0..-2]  # All except the last (compression instruction)
+        original_messages = @history.to_a[0..-2]  # All except the last (compression instruction)
 
         # Archive compressed messages to a chunk MD file before discarding them
         chunk_index = @compressed_summaries.size + 1
@@ -128,12 +130,12 @@ module Clacky
           compression_level: compression_context[:compression_level]
         )
 
-        @messages = @message_compressor.rebuild_with_compression(
+        @history.replace_all(@message_compressor.rebuild_with_compression(
           compressed_content,
           original_messages: original_messages,
           recent_messages: compression_context[:recent_messages],
           chunk_path: chunk_path
-        )
+        ))
 
         # Track this compression
         @compressed_summaries << {

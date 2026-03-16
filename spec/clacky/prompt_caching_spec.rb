@@ -69,7 +69,7 @@ RSpec.describe "Prompt Caching Feature" do
       agent.run("Test prompt")
 
       # Agent messages should not have cache_control (it's applied in client layer)
-      system_msg = agent.messages.find { |m| m[:role] == "system" }
+      system_msg = agent.history.to_a.find { |m| m[:role] == "system" }
       expect(system_msg).not_to be_nil
       expect(system_msg[:cache_control]).to be_nil
     end

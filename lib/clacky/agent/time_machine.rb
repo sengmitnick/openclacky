@@ -90,15 +90,15 @@ module Clacky
         raise
       end
 
-      # Filter messages to only show tasks up to active_task_id
-      # This hides "future" messages when user has undone
+      # Filter messages to only show tasks up to active_task_id.
+      # This hides "future" messages when user has undone.
+      # Returns API-ready array (strips internal fields + handles orphaned tool_calls).
       # Made public for testing
       def active_messages
-        return @messages if @active_task_id == @current_task_id
-        
-        @messages.select do |msg|
-          msg_task_id = msg[:task_id] || 0
-          msg_task_id <= @active_task_id
+        return @history.to_api if @active_task_id == @current_task_id
+
+        @history.for_task(@active_task_id).map do |msg|
+          msg.reject { |k, _| MessageHistory::INTERNAL_FIELDS.include?(k) }
         end
       end
 

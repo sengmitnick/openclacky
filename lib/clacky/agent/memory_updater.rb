@@ -44,12 +44,12 @@ module Clacky
         @memory_updating = true
         @ui&.show_progress("Updating long-term memory…")
 
-        @messages << {
+        @history.append({
           role: "user",
           content: build_memory_update_prompt,
           system_injected: true,
           memory_update: true
-        }
+        })
 
         true
       end
@@ -59,7 +59,7 @@ module Clacky
       def cleanup_memory_messages
         return unless @memory_prompt_injected
 
-        @messages.reject! { |m| m[:memory_update] }
+        @history.delete_where { |m| m[:memory_update] }
         @memory_prompt_injected = false
         @memory_updating = false
         @ui&.clear_progress
