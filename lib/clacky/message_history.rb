@@ -10,7 +10,7 @@ module Clacky
     # Fields that are internal to the agent and must not be sent to the API.
     INTERNAL_FIELDS = %i[
       task_id created_at system_injected session_context memory_update
-      subagent_instructions subagent_result token_usage reasoning_content
+      subagent_instructions subagent_result token_usage
       compressed_summary chunk_path truncated transient
     ].freeze
 
