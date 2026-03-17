@@ -223,13 +223,23 @@
         <div class="skills-page-header">
           <h2 class="skills-page-title" data-i18n="skills.title">Skills</h2>
           <p class="skills-page-subtitle" data-i18n="skills.subtitle">Extend your assistant's capabilities with custom skills</p>
-          <button id="btn-create-skill" class="btn-create-skill" title="Create a new skill">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sm">
-              <path d="M5 12h14"/>
-              <path d="M12 5v14"/>
-            </svg>
-            <span data-i18n="skills.btn.new">New Skill</span>
-          </button>
+          <div class="skill-action-btns">
+            <button id="btn-import-skill" class="btn-import-skill" title="Import skill from ZIP or GitHub URL">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sm">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <span data-i18n="skills.btn.import">Import</span>
+            </button>
+            <button id="btn-create-skill" class="btn-create-skill" title="Create a new skill with AI">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sm">
+                <path d="M5 12h14"/>
+                <path d="M12 5v14"/>
+              </svg>
+              <span data-i18n="skills.btn.create">Create</span>
+            </button>
+          </div>
         </div>
 
         <!-- Tab bar -->
@@ -241,6 +251,30 @@
 
         <!-- Tab: My Skills -->
         <div id="skills-tab-my" class="skills-tab-content">
+          <!-- Inline import bar (toggled by Import button) -->
+          <div id="skill-import-bar" class="skill-import-bar" style="display:none">
+            <div class="skill-import-bar-inner">
+              <!-- Link icon -->
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="skill-import-link-icon">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+              <input id="skill-import-input" class="skill-import-input" type="text"
+                     placeholder="Paste ZIP or GitHub URL…" data-i18n-placeholder="skills.import.placeholder" />
+              <!-- Hidden file input for local ZIP selection -->
+              <input id="skill-import-file" type="file" accept=".zip" style="display:none" />
+              <!-- Browse local file button -->
+              <button id="btn-skill-import-browse" class="btn-skill-import-browse" title="Choose local ZIP file">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+              </button>
+              <button id="btn-skill-import-confirm" class="btn-skill-import-confirm">
+                <span data-i18n="skills.import.install">Install</span>
+              </button>
+              <button id="btn-skill-import-cancel" class="btn-skill-import-cancel" title="Cancel">✕</button>
+            </div>
+          </div>
           <div id="skills-list"></div>
         </div>
 
