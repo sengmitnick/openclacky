@@ -896,7 +896,7 @@ module Clacky
       # Skip if we already have a context for today
       return if @history.last_session_context_date == today
 
-      content = "[Session context: Today is #{Time.now.strftime('%Y-%m-%d, %A')}. Current model: #{current_model}]"
+      content = "[Session context: Today is #{Time.now.strftime('%Y-%m-%d, %A')}. Current model: #{current_model}. Working directory: #{@working_dir}]"
       @history.append({
         role: "user",
         content: content,
