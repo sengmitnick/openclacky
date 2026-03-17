@@ -19,12 +19,13 @@ require 'find'
 class ZipSkillInstaller
   ZIP_URL_PATTERN = %r{^https?://.+\.zip(\?.*)?$}i
 
-  def initialize(zip_url, skill_name: nil, target_dir: nil)
-    @zip_url    = zip_url
+  def initialize(zip_source, skill_name: nil, target_dir: nil)
+    @zip_source = zip_source
+    @local_path = local_zip_path?(zip_source)
     # skill_name can be provided explicitly (e.g. slug from the store API).
-    # If not provided, we try to infer it from the filename in the URL, e.g.
+    # If not provided, we try to infer it from the filename in the URL/path, e.g.
     # "ui-ux-pro-max-1.0.0.zip" → "ui-ux-pro-max".
-    @skill_name = skill_name || infer_skill_name_from_url(zip_url)
+    @skill_name = skill_name || infer_skill_name(zip_source)
     @target_dir = target_dir || File.join(Dir.pwd, '.clacky', 'skills')
     @installed_skills = []
     @errors = []
@@ -32,15 +33,30 @@ class ZipSkillInstaller
 
   # Main installation entry point.
   def install
-    unless valid_zip_url?
-      raise ArgumentError, "Invalid zip URL: #{@zip_url}\nURL must be an http(s) address ending with .zip"
-    end
+    if @local_path
+      # Install directly from a local zip file — no download needed.
+      # Expand tilde in path (e.g. ~/Downloads/skill.zip)
+      expanded = File.expand_path(@zip_source)
+      raise ArgumentError, "File not found: #{@zip_source}" unless File.exist?(expanded)
+      raise ArgumentError, "Not a zip file: #{@zip_source}" unless expanded.end_with?('.zip')
 
-    Dir.mktmpdir('clacky-zip-') do |tmpdir|
-      zip_path = download_zip(tmpdir)
-      extract_zip(zip_path, tmpdir)
-      extracted_dir = File.join(tmpdir, 'extracted')
-      discover_and_install_skills(extracted_dir)
+      Dir.mktmpdir('clacky-zip-') do |tmpdir|
+        extract_zip(expanded, tmpdir)
+        extracted_dir = File.join(tmpdir, 'extracted')
+        discover_and_install_skills(extracted_dir)
+      end
+    else
+      # Install from a remote URL.
+      unless valid_zip_url?
+        raise ArgumentError, "Invalid zip source: #{@zip_source}\nProvide an http(s) URL ending with .zip, or an absolute path to a local zip file."
+      end
+
+      Dir.mktmpdir('clacky-zip-') do |tmpdir|
+        zip_path = download_zip(tmpdir)
+        extract_zip(zip_path, tmpdir)
+        extracted_dir = File.join(tmpdir, 'extracted')
+        discover_and_install_skills(extracted_dir)
+      end
     end
 
     report_results
@@ -52,25 +68,36 @@ class ZipSkillInstaller
     exit 1
   end
 
+  # Return true if the source looks like a local file path (absolute or relative ending in .zip).
+  private def local_zip_path?(source)
+    source.start_with?('/') || source.start_with?('~') || source.start_with?('./') ||
+      (source.end_with?('.zip') && !source.start_with?('http'))
+  end
+
   # Infer a skill name from the zip filename, stripping version suffixes.
+  # Works for both URLs and local paths.
   # e.g. "ui-ux-pro-max-1.0.0.zip" → "ui-ux-pro-max"
-  private def infer_skill_name_from_url(url)
-    filename = File.basename(URI.parse(url).path, '.zip') rescue File.basename(url, '.zip')
+  private def infer_skill_name(source)
+    filename = if source.start_with?('http')
+                 File.basename(URI.parse(source).path, '.zip') rescue File.basename(source, '.zip')
+               else
+                 File.basename(source, '.zip')
+               end
     # Strip trailing version segment like "-1.0.0" or "-2.3"
     filename.sub(/-\d+(\.\d+)+$/, '')
   end
 
   private def valid_zip_url?
-    @zip_url.match?(ZIP_URL_PATTERN)
+    @zip_source.match?(ZIP_URL_PATTERN)
   end
 
   # Download the zip file to tmpdir and return its local path.
   private def download_zip(tmpdir)
     puts "⬇️  Downloading skill package..."
-    puts "   #{@zip_url}"
+    puts "   #{@zip_source}"
 
     zip_path = File.join(tmpdir, 'skill.zip')
-    uri = URI.parse(@zip_url)
+    uri = URI.parse(@zip_source)
 
     # Follow redirects up to 5 times (ActiveStorage often redirects).
     max_redirects = 5
@@ -91,13 +118,13 @@ class ZipSkillInstaller
             raise "Redirect loop or missing Location header" if location.nil? || location == current_uri.to_s
             current_uri = URI.parse(location)
           else
-            raise "HTTP #{response.code} while downloading #{@zip_url}"
+            raise "HTTP #{response.code} while downloading #{@zip_source}"
           end
         end
       end
     end
 
-    raise "Too many redirects downloading #{@zip_url}"
+    raise "Too many redirects downloading #{@zip_source}"
   end
 
   # Extract the zip archive into <tmpdir>/extracted/.
@@ -222,10 +249,12 @@ end
 # ── Entry point ────────────────────────────────────────────────────────────────
 if __FILE__ == $0
   if ARGV.empty?
-    puts "Usage: ruby install_from_zip.rb <zip_url> [skill_name]"
+    puts "Usage: ruby install_from_zip.rb <zip_url_or_path> [skill_name]"
     puts "\nExamples:"
     puts "  ruby install_from_zip.rb https://example.com/my-skill-1.0.0.zip"
     puts "  ruby install_from_zip.rb https://example.com/my-skill-1.0.0.zip my-skill"
+    puts "  ruby install_from_zip.rb /path/to/my-skill.zip"
+    puts "  ruby install_from_zip.rb ~/Downloads/my-skill-1.0.0.zip my-skill"
     exit 1
   end
 
