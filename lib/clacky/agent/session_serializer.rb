@@ -159,7 +159,7 @@ module Clacky
         # kept slice, render the surviving assistant/tool messages directly so the user can
         # still see the last visible state of the chat (e.g. compressed summary + recent work).
         if rounds.empty?
-          visible = @messages.reject { |m| m[:role].to_s == "system" || m[:system_injected] }
+          visible = @history.to_a.reject { |m| m[:role].to_s == "system" || m[:system_injected] }
           visible.each { |msg| _replay_single_message(msg, ui) }
           return { has_more: false }
         end

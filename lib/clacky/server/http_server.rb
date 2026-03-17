@@ -1479,9 +1479,17 @@ module Clacky
       # GET /api/sessions/:id/messages?limit=20&before=1709123456.789
       # Replays conversation history for a session via the agent's replay_history method.
       # Returns a list of UI events (same format as WS events) for the frontend to render.
+      # If the session is not in memory, attempt a lazy restore from disk (same as WS subscribe).
       def api_session_messages(session_id, req, res)
+        # Lazy-load session from disk if not already in memory (e.g. after server restart
+        # or when a plugin session was not previously subscribed via WS).
         unless @registry.exist?(session_id)
-          return json_response(res, 404, { error: "Session not found" })
+          session_data = @session_manager.load(session_id)
+          if session_data
+            build_session_from_data(session_data, hidden: true)
+          else
+            return json_response(res, 404, { error: "Session not found" })
+          end
         end
 
         # Parse query params
@@ -1502,6 +1510,9 @@ module Clacky
         result    = agent.replay_history(collector, limit: limit, before: before)
 
         json_response(res, 200, { events: collected, has_more: result[:has_more] })
+      rescue StandardError => e
+        Clacky::Logger.warn("api_session_messages error for #{session_id}: #{e.message}")
+        json_response(res, 500, { error: e.message })
       end
 
       def api_rename_session(session_id, req, res)
