@@ -176,10 +176,9 @@ module Clacky
       # Append supporting files list if any exist
       if has_supporting_files?
         processed_content += "\n\n## Supporting Files\n\n"
-        processed_content += "The following files are available in this skill's directory:\n\n"
+        processed_content += "The following files are available in this skill's directory (`#{@directory}`):\n\n"
         supporting_files.each do |file|
-          relative_path = file.relative_path_from(@directory)
-          processed_content += "- `#{relative_path}`\n"
+          processed_content += "- `#{file}`\n"
         end
       end
 
@@ -411,8 +410,12 @@ module Clacky
       # characters that have special meaning in shell but not in plain text.
       args_array = arguments.split
 
+      # Replace $SKILL_DIR with the absolute path of this skill's directory.
+      # Allows SKILL.md files to reference bundled scripts without runtime `find`.
+      result = content.gsub("$SKILL_DIR", @directory.to_s)
+
       # Replace $ARGUMENTS with all arguments
-      result = content.gsub("$ARGUMENTS", arguments.to_s)
+      result = result.gsub("$ARGUMENTS", arguments.to_s)
 
       # Replace $ARGUMENTS[N] with specific argument
       result.gsub!(/\$ARGUMENTS\[(\d+)\]/) do
