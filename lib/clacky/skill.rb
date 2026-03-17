@@ -22,6 +22,7 @@ module Clacky
       model
       forbidden_tools
       auto_summarize
+
     ].freeze
 
     attr_reader :directory, :frontmatter, :source_path

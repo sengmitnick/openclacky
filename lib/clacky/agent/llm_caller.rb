@@ -19,9 +19,14 @@ module Clacky
         retries = 0
 
         begin
-          # Use active_messages to filter out "future" messages after undo
-          messages_to_send = respond_to?(:active_messages) ? active_messages : @messages
-          
+          # Use active_messages (Time Machine) when undone, otherwise send full history.
+          # to_api strips internal fields and handles orphaned tool_calls.
+          messages_to_send = if respond_to?(:active_messages)
+            active_messages
+          else
+            @history.to_api
+          end
+
           response = @client.send_messages_with_tools(
             messages_to_send,
             model: current_model,

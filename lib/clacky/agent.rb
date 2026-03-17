@@ -32,7 +32,7 @@ module Clacky
     include TimeMachine
     include MemoryUpdater
 
-    attr_reader :session_id, :name, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
+    attr_reader :session_id, :name, :history, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
                 :status, :error, :updated_at
 
@@ -46,7 +46,7 @@ module Clacky
       @hooks = HookManager.new
       @session_id = session_id
       @name = ""
-      @messages = []
+      @history = MessageHistory.new
       @todos = []  # Store todos in memory
       @iterations = 0
       @total_cost = 0.0
@@ -161,7 +161,6 @@ module Clacky
       # across tasks to correctly calculate delta tokens in each iteration
       @task_start_iterations = @iterations  # Track starting iterations for this task
       @task_start_cost = @total_cost  # Track starting cost for this task
-
       # Track cache stats for current task
       @task_cache_stats = {
         cache_creation_input_tokens: 0,
@@ -171,15 +170,9 @@ module Clacky
       }
 
       # Add system prompt as the first message if this is the first run
-      if @messages.empty?
+      if @history.empty?
         system_prompt = build_system_prompt
-        system_message = { role: "system", content: system_prompt }
-
-        # Note: Don't set cache_control on system prompt
-        # System prompt is usually < 1024 tokens (minimum for caching)
-        # Cache control will be set on tools and conversation history instead
-
-        @messages << system_message
+        @history.append({ role: "system", content: system_prompt })
       end
 
       # Inject session context (date + model) if not yet present or date has changed
@@ -187,7 +180,7 @@ module Clacky
 
       # Format user message with images and files if provided
       user_content = format_user_content(user_input, images, files)
-      @messages << { role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f }
+      @history.append({ role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f })
       @total_tasks += 1
 
       # If the user typed a slash command targeting a skill with disable-model-invocation: true,
@@ -275,11 +268,11 @@ module Clacky
             # If user provided feedback, treat it as a user question/instruction
             if action_result[:feedback] && !action_result[:feedback].empty?
               # Add user feedback as a new user message with system_injected marker
-              @messages << {
+              @history.append({
                 role: "user",
                 content: "STOP. The user has a question/feedback for you: #{action_result[:feedback]}\n\nPlease respond to the user's question/feedback before continuing with any actions.",
-                system_injected: true  # Mark as system-injected message for filtering
-              }
+                system_injected: true
+              })
               # Continue loop to let agent respond to feedback
               next
             else
@@ -290,16 +283,15 @@ module Clacky
           end
         end
 
-        result = build_result(:success)
+      result = build_result
 
-        # Save snapshots of modified files for Time Machine
-        if @modified_files_in_task && !@modified_files_in_task.empty?
-          save_modified_files_snapshot(@modified_files_in_task)
-          @modified_files_in_task = []  # Reset for next task
-        end
-
+      # Save snapshots of modified files for Time Machine
+      if @modified_files_in_task && !@modified_files_in_task.empty?
+        save_modified_files_snapshot(@modified_files_in_task)
+        @modified_files_in_task = []  # Reset for next task
+      end
         if @is_subagent
-          @ui&.show_info("Subagent done (#{result[:iterations]} iterations, $#{result[:total_cost_usd].round(4)})")
+          # Parent agent (skill_manager) prints the completion summary; skip here.
         else
           @ui&.show_complete(
             iterations: result[:iterations],
@@ -326,7 +318,7 @@ module Clacky
         Clacky::Logger.error("agent_run_error", error: e)
 
         # Build error result for session data, but let CLI handle error display
-        result = build_result(:error, error: e.message)
+        result = build_result(:error, error: e.message)  # rubocop:disable Lint/UselessAssignment
         raise
       ensure
         # Always clean up memory update messages, even if interrupted or error occurred
@@ -351,16 +343,19 @@ module Clacky
           "Message history compression starting (~#{compression_context[:original_token_count]} tokens, #{compression_context[:original_message_count]} messages) - Level #{compression_context[:compression_level]}"
         )
         compression_message = compression_context[:compression_message]
-        @messages << compression_message
+        @history.append(compression_message)
         compression_handled = false
         begin
           response = call_llm
           handle_compression_response(response, compression_context)
           compression_handled = true
         ensure
-          # If interrupted or failed, remove the dangling compression message
-          # so it doesn't pollute future conversation turns
-          @messages.pop if !compression_handled && @messages.last.equal?(compression_message)
+          # If interrupted or failed, remove the dangling compression message so it
+          # doesn't pollute future conversation turns.
+          unless compression_handled
+            @history.pop_while { |m| m[:system_injected] && !m.equal?(compression_message) }
+            @history.pop_last if @history.to_a.last&.equal?(compression_message)
+          end
         end
         return nil
       end
@@ -371,9 +366,7 @@ module Clacky
       # Handle truncated responses (when max_tokens limit is reached)
       if response[:finish_reason] == "length"
         # Count recent truncations to prevent infinite loops
-        recent_truncations = @messages.last(5).count { |m|
-          m[:role] == "user" && m[:content]&.include?("[SYSTEM] Your response was truncated")
-        }
+        recent_truncations = @history.recent_truncation_count(5)
 
         if recent_truncations >= 2
           # Too many truncations - task is too complex
@@ -391,23 +384,24 @@ module Clacky
           }
 
           # Add this as an assistant message so it appears in conversation
-          @messages << {
+          @history.append({
             role: "assistant",
             content: error_response[:content]
-          }
+          })
 
           return error_response
         end
 
         # Insert system message to guide LLM to retry with smaller steps
-        @messages << {
+        @history.append({
           role: "user",
           content: "[SYSTEM] Your response was truncated due to length limit. Please retry with a different approach:\n" \
                    "- For long file content: create the file with structure first, then use edit() to add content section by section\n" \
                    "- Break down large tasks into multiple smaller steps\n" \
                    "- Avoid putting more than 2000 characters in a single tool call argument\n" \
-                   "- Use multiple tool calls instead of one large call"
-        }
+                   "- Use multiple tool calls instead of one large call",
+          truncated: true
+        })
 
         @ui&.show_warning("Response truncated. Retrying with smaller steps...")
 
@@ -415,7 +409,7 @@ module Clacky
         return think
       end
 
-      # Add assistant response to messages
+      # Add assistant response to history
       msg = { role: "assistant", task_id: @current_task_id }
       # Always include content field (some APIs require it even with tool_calls)
       # Use empty string instead of null for better compatibility
@@ -429,7 +423,7 @@ module Clacky
       # Preserve reasoning_content so it is echoed back to APIs that require it
       # (e.g. Kimi/Moonshot extended thinking — omitting it causes HTTP 400)
       msg[:reasoning_content] = response[:reasoning_content] if response[:reasoning_content]
-      @messages << msg
+      @history.append(msg)
 
       response
     end
@@ -625,7 +619,7 @@ module Clacky
       return if tool_results.empty?
 
       formatted_messages = @client.format_tool_results(response, tool_results, model: current_model)
-      formatted_messages.each { |msg| @messages << msg.merge(task_id: @current_task_id) }
+      formatted_messages.each { |msg| @history.append(msg.merge(task_id: @current_task_id)) }
     end
 
     # Interrupt the agent's current run
@@ -648,22 +642,19 @@ module Clacky
       false
     end
 
-    private def build_result(status, error: nil)
-      # Calculate iterations for current task only
+    private def build_result(status = :success, error: nil)
       task_iterations = @iterations - (@task_start_iterations || 0)
-
-      # Calculate cost for current task only
       task_cost = @total_cost - (@task_start_cost || 0)
 
       {
         status: status,
         session_id: @session_id,
-        iterations: task_iterations,  # Show only current task iterations
+        iterations: task_iterations,
         duration_seconds: Time.now - @start_time,
-        total_cost_usd: task_cost.round(4),  # Show only current task cost
-        cost_source: @task_cost_source,  # Add cost source for this task
-        cache_stats: @task_cache_stats || @cache_stats,  # Use task cache stats if available
-        messages: @messages,
+        total_cost_usd: task_cost.round(4),
+        cost_source: @task_cost_source,
+        cache_stats: @task_cache_stats || @cache_stats,
+        history: @history,
         error: error
       }
     end
@@ -764,12 +755,19 @@ module Clacky
       # Inherit previous_total_tokens so the first iteration delta is calculated correctly
       subagent.instance_variable_set(:@previous_total_tokens, @previous_total_tokens)
 
-      # Deep clone messages to avoid cross-contamination
-      subagent.instance_variable_set(:@messages, deep_clone(@messages))
+      # Deep clone history to avoid cross-contamination.
+      # to_api already strips trailing orphaned tool_calls; we use to_a here so the
+      # subagent gets the full internal list and its own to_api handles the strip on send.
+      cloned_messages = deep_clone(@history.to_a)
+      # Strip pending tool_calls (no tool_result yet) — fork happens inside act(),
+      # before observe() has appended tool results. Anthropic rejects orphaned tool_use.
+      cloned_messages.pop if cloned_messages.last&.dig(:role) == "assistant" &&
+                             cloned_messages.last[:tool_calls]&.any?
+      subagent.instance_variable_set(:@history, MessageHistory.new(cloned_messages))
 
       # Append system prompt suffix as user message (for cache reuse)
       if system_prompt_suffix
-        messages = subagent.instance_variable_get(:@messages)
+        subagent_history = subagent.history
 
         # Build forbidden tools notice if any tools are forbidden
         forbidden_notice = if forbidden_tools.any?
@@ -779,21 +777,20 @@ module Clacky
           ""
         end
 
-        messages << {
+        subagent_history.append({
           role: "user",
           content: "CRITICAL: TASK CONTEXT SWITCH - FORKED SUBAGENT MODE\n\nYou are now running as a forked subagent — a temporary, isolated agent spawned by the parent agent to handle a specific task. You run independently and cannot communicate back to the parent mid-task. When you finish (i.e., you stop calling tools and return a final response), your output will be automatically summarized and returned to the parent agent as a result so it can continue.\n\n#{system_prompt_suffix}#{forbidden_notice}",
           system_injected: true,
           subagent_instructions: true
-        }
+        })
 
         # Insert an assistant acknowledgement so the conversation structure is complete:
         #   [user] role/constraints  →  [assistant] ack  →  [user] actual task (from run())
-        # Without this, two consecutive user messages confuse the model about what to act on.
-        messages << {
+        subagent_history.append({
           role: "assistant",
           content: "Understood. I am now operating as a subagent with the constraints above. Please provide the task.",
           system_injected: true
-        }
+        })
       end
 
       # Register hook to forbid certain tools at runtime (doesn't affect tool registry for cache)
@@ -812,7 +809,7 @@ module Clacky
 
       # Mark subagent metadata for summary generation
       subagent.instance_variable_set(:@is_subagent, true)
-      subagent.instance_variable_set(:@parent_message_count, @messages.length)
+      subagent.instance_variable_set(:@parent_message_count, @history.size)
 
       subagent
     end
@@ -824,7 +821,7 @@ module Clacky
     # @return [String] Summary text to insert into parent agent
     def generate_subagent_summary(subagent)
       parent_count = subagent.instance_variable_get(:@parent_message_count) || 0
-      new_messages = subagent.messages[parent_count..-1] || []
+      new_messages = subagent.history.to_a[parent_count..] || []
 
       # Extract tool calls
       tool_calls = new_messages
@@ -896,20 +893,17 @@ module Clacky
     private def inject_session_context_if_needed
       today = Time.now.strftime("%Y-%m-%d")
 
-      # Find the last injected context message
-      last_ctx = @messages.reverse.find { |m| m[:session_context] }
-
       # Skip if we already have a context for today
-      return if last_ctx && last_ctx[:context_date] == today
+      return if @history.last_session_context_date == today
 
       content = "[Session context: Today is #{Time.now.strftime('%Y-%m-%d, %A')}. Current model: #{current_model}]"
-      @messages << {
+      @history.append({
         role: "user",
         content: content,
         system_injected: true,
         session_context: true,
-        context_date: today
-      }
+        session_date: today
+      })
     end
 
     # Track modified files for Time Machine snapshots

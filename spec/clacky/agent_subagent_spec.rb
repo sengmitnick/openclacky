@@ -27,59 +27,59 @@ RSpec.describe Clacky::Agent, "#fork_subagent" do
 
   describe "#fork_subagent" do
     it "creates a subagent with the same messages" do
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "system", content: "You are a helpful assistant" },
         { role: "user", content: "Hello" }
-      ])
+      ]))
 
       subagent = agent.fork_subagent
 
       expect(subagent).to be_a(Clacky::Agent)
-      expect(subagent.messages.length).to eq(2)
-      expect(subagent.messages[0][:role]).to eq("system")
-      expect(subagent.messages[1][:role]).to eq("user")
+      expect(subagent.history.size).to eq(2)
+      expect(subagent.history.to_a[0][:role]).to eq("system")
+      expect(subagent.history.to_a[1][:role]).to eq("user")
     end
 
     it "deep clones messages to avoid cross-contamination" do
       original_messages = [
         { role: "user", content: "Hello", metadata: { key: "value" } }
       ]
-      agent.instance_variable_set(:@messages, original_messages)
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new(original_messages))
 
       subagent = agent.fork_subagent
 
       # Modify subagent message
-      subagent.messages[0][:content] = "Modified"
-      subagent.messages[0][:metadata][:key] = "modified"
+      subagent.history.to_a[0][:content] = "Modified"
+      subagent.history.to_a[0][:metadata][:key] = "modified"
 
       # Parent should be unchanged
-      expect(agent.messages[0][:content]).to eq("Hello")
-      expect(agent.messages[0][:metadata][:key]).to eq("value")
+      expect(agent.history.to_a[0][:content]).to eq("Hello")
+      expect(agent.history.to_a[0][:metadata][:key]).to eq("value")
     end
 
     it "appends system_prompt_suffix as user message followed by assistant acknowledgement" do
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "system", content: "System prompt" }
-      ])
+      ]))
 
       subagent = agent.fork_subagent(
         system_prompt_suffix: "You are a code explorer."
       )
 
       # Should have 3 messages: system + user instructions + assistant ack
-      expect(subagent.messages.length).to eq(3)
+      expect(subagent.history.size).to eq(3)
 
       # [1] user: subagent role/constraints
-      expect(subagent.messages[1][:role]).to eq("user")
-      expect(subagent.messages[1][:content]).to include("CRITICAL: TASK CONTEXT SWITCH")
-      expect(subagent.messages[1][:content]).to include("You are a code explorer.")
-      expect(subagent.messages[1][:system_injected]).to be true
-      expect(subagent.messages[1][:subagent_instructions]).to be true
+      expect(subagent.history.to_a[1][:role]).to eq("user")
+      expect(subagent.history.to_a[1][:content]).to include("CRITICAL: TASK CONTEXT SWITCH")
+      expect(subagent.history.to_a[1][:content]).to include("You are a code explorer.")
+      expect(subagent.history.to_a[1][:system_injected]).to be true
+      expect(subagent.history.to_a[1][:subagent_instructions]).to be true
 
       # [2] assistant: acknowledgement — gives run() a clean [user] slot for the actual task
-      expect(subagent.messages[2][:role]).to eq("assistant")
-      expect(subagent.messages[2][:content]).to include("Understood")
-      expect(subagent.messages[2][:system_injected]).to be true
+      expect(subagent.history.to_a[2][:role]).to eq("assistant")
+      expect(subagent.history.to_a[2][:content]).to include("Understood")
+      expect(subagent.history.to_a[2][:system_injected]).to be true
     end
 
     it "registers hook to forbid tools" do
@@ -107,7 +107,7 @@ RSpec.describe Clacky::Agent, "#fork_subagent" do
     end
 
     it "marks subagent with metadata" do
-      agent.instance_variable_set(:@messages, [{ role: "user", content: "test" }])
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([{ role: "user", content: "test" }]))
       
       subagent = agent.fork_subagent
 
@@ -144,9 +144,9 @@ RSpec.describe Clacky::Agent, "#fork_subagent" do
   describe "#generate_subagent_summary" do
     it "generates summary from subagent execution" do
       # Set up parent agent with initial message
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "user", content: "Find all Ruby files" }
-      ])
+      ]))
       
       subagent = agent.fork_subagent
       subagent.instance_variable_set(:@parent_message_count, 1)
@@ -154,14 +154,14 @@ RSpec.describe Clacky::Agent, "#fork_subagent" do
       subagent.instance_variable_set(:@total_cost, 0.0025)
       
       # Simulate subagent adding messages
-      subagent.messages << {
+      subagent.history.append({
         role: "assistant",
         content: "I found 5 files",
         tool_calls: [
           { name: "glob", arguments: "{}" },
           { name: "file_reader", arguments: "{}" }
         ]
-      }
+      })
 
       summary = agent.generate_subagent_summary(subagent)
 

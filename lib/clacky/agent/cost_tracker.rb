@@ -125,7 +125,7 @@ module Clacky
         tool_tokens = 0
         summary_tokens = 0
 
-        @messages.each do |msg|
+        @history.to_a.each do |msg|
           tokens = estimate_tokens(msg[:content])
           case msg[:role]
           when "system"

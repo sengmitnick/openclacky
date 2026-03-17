@@ -31,7 +31,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
 
       agent.run("/onboard")
 
-      assistant_msgs = agent.messages.select { |m| m[:role] == "assistant" && m[:system_injected] }
+      assistant_msgs = agent.history.to_a.select { |m| m[:role] == "assistant" && m[:system_injected] }
       expect(assistant_msgs.size).to eq(1)
       expect(assistant_msgs.first[:content]).to include("Onboard the user now.")
     end
@@ -50,7 +50,8 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
       # After the injected assistant message there must be a user shim so the
       # conversation sequence ends with a user turn (required by Claude / Anthropic API).
       # Exclude session_context messages which are also system_injected but unrelated to skills.
-      injected_msgs = agent.messages.select { |m| m[:system_injected] && !m[:session_context] }
+      all_msgs = agent.history.to_a
+      injected_msgs = all_msgs.select { |m| m[:system_injected] && !m[:session_context] }
       expect(injected_msgs.size).to eq(2)
 
       assistant_shim = injected_msgs.find { |m| m[:role] == "assistant" }
@@ -61,7 +62,6 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
       expect(user_shim[:content]).to include("proceed")
 
       # The user shim must appear immediately after the assistant shim
-      all_msgs = agent.messages
       assistant_idx = all_msgs.index(assistant_shim)
       user_idx      = all_msgs.index(user_shim)
       expect(user_idx).to eq(assistant_idx + 1)
@@ -78,7 +78,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
 
       agent.run("/onboard hello world")
 
-      injected = agent.messages.find { |m| m[:role] == "assistant" && m[:system_injected] }
+      injected = agent.history.to_a.find { |m| m[:role] == "assistant" && m[:system_injected] }
       expect(injected[:content]).to include("hello world")
     end
   end
@@ -94,7 +94,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
 
       agent.run("/my-skill")
 
-      injected = agent.messages.select { |m| m[:role] == "assistant" && m[:system_injected] }
+      injected = agent.history.to_a.select { |m| m[:role] == "assistant" && m[:system_injected] }
       expect(injected.size).to eq(1)
       expect(injected.first[:content]).to include("Normal skill content.")
     end
@@ -111,7 +111,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
       agent.run("just a normal message")
 
       # Only check skill-injected messages; session_context messages are also system_injected but expected
-      injected = agent.messages.select { |m| m[:system_injected] && !m[:session_context] }
+      injected = agent.history.to_a.select { |m| m[:system_injected] && !m[:session_context] }
       expect(injected).to be_empty
     end
   end

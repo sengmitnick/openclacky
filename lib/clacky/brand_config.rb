@@ -34,8 +34,10 @@ module Clacky
     CONFIG_DIR  = File.join(Dir.home, ".clacky")
     BRAND_FILE  = File.join(CONFIG_DIR, "brand.yml")
 
-    # OpenClacky Cloud API base URL
-    API_BASE_URL = "https://www.openclacky.com"
+    # OpenClacky Cloud API base URL.
+    # Override with CLACKY_LICENSE_SERVER env var for local development:
+    #   CLACKY_LICENSE_SERVER=http://localhost:3000 bundle exec ruby bin/clacky server
+    API_BASE_URL = ENV.fetch("CLACKY_LICENSE_SERVER", "https://www.openclacky.com")
 
     # How often to send a heartbeat (seconds) — once per day
     HEARTBEAT_INTERVAL = 86_400
@@ -920,7 +922,7 @@ module Clacky
       }
 
       response = api_post("/api/v1/licenses/skill_keys", payload)
-      raise "Failed to fetch decryption key: #{response[:error]}" unless response[:success]
+      raise "Brand skill decrypt failed: #{response[:error]}" unless response[:success]
 
       data       = response[:data]
       key_bytes  = [data["decryption_key"]].pack("H*")
@@ -947,7 +949,7 @@ module Clacky
       cipher.auth_tag = Base64.strict_decode64(tag_b64)
       (cipher.update(ciphertext) + cipher.final).force_encoding("UTF-8")
     rescue OpenSSL::Cipher::CipherError => e
-      raise "AES-256-GCM decryption failed: #{e.message}. " \
+      raise "Decryption failed: #{e.message}. " \
             "The file may be corrupted or the license key is incorrect."
     end
 

@@ -10,7 +10,7 @@ RSpec.describe "Agent session history" do
 
     before do
       # Simulate a conversation with multiple user/assistant exchanges
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "system", content: "System prompt" },
         { role: "user", content: "First user message" },
         { role: "assistant", content: "First assistant response" },
@@ -23,7 +23,7 @@ RSpec.describe "Agent session history" do
         { role: "user", content: "Fifth user message" },
         { role: "assistant", content: "Fifth assistant response" },
         { role: "user", content: "Sixth user message" }
-      ])
+      ]))
     end
 
     it "returns the last 5 user messages by default" do
@@ -48,23 +48,23 @@ RSpec.describe "Agent session history" do
     end
 
     it "handles empty messages array" do
-      agent.instance_variable_set(:@messages, [])
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([]))
       messages = agent.get_recent_user_messages(limit: 5)
       
       expect(messages).to be_empty
     end
 
     it "handles messages with only system prompt" do
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "system", content: "System prompt" }
-      ])
+      ]))
       messages = agent.get_recent_user_messages(limit: 5)
       
       expect(messages).to be_empty
     end
 
     it "extracts text from array-formatted content (with images)" do
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "system", content: "System prompt" },
         { 
           role: "user", 
@@ -74,7 +74,7 @@ RSpec.describe "Agent session history" do
           ]
         },
         { role: "assistant", content: "Response to message with image" }
-      ])
+      ]))
       
       messages = agent.get_recent_user_messages(limit: 5)
       
@@ -83,7 +83,7 @@ RSpec.describe "Agent session history" do
     end
 
     it "filters out system-injected feedback messages" do
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "system", content: "System prompt" },
         { role: "user", content: "First real user message" },
         { role: "assistant", content: "First response" },
@@ -94,7 +94,7 @@ RSpec.describe "Agent session history" do
         },
         { role: "assistant", content: "Response to feedback" },
         { role: "user", content: "Second real user message" }
-      ])
+      ]))
       
       messages = agent.get_recent_user_messages(limit: 5)
       
@@ -106,7 +106,7 @@ RSpec.describe "Agent session history" do
     end
 
     it "filters out edit preview error feedback messages" do
-      agent.instance_variable_set(:@messages, [
+      agent.instance_variable_set(:@history, Clacky::MessageHistory.new([
         { role: "system", content: "System prompt" },
         { role: "user", content: "Edit this file" },
         { role: "assistant", content: "I'll edit the file", tool_calls: [{ id: "1", function: { name: "edit" } }] },
@@ -117,7 +117,7 @@ RSpec.describe "Agent session history" do
         },
         { role: "assistant", content: "Let me read the file first" },
         { role: "user", content: "Another real user request" }
-      ])
+      ]))
       
       messages = agent.get_recent_user_messages(limit: 5)
       

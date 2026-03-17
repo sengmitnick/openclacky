@@ -10,7 +10,7 @@ module Clacky
       def restore_session(session_data)
         @session_id = session_data[:session_id]
         @name = session_data[:name] || ""
-        @messages = session_data[:messages]
+        @history = MessageHistory.new(session_data[:messages] || [])
         @todos = session_data[:todos] || []  # Restore todos from session
         @iterations = session_data.dig(:stats, :total_iterations) || 0
         @total_cost = session_data.dig(:stats, :total_cost_usd) || 0.0
@@ -39,13 +39,11 @@ module Clacky
         last_error = session_data.dig(:stats, :last_error)
 
         if last_status == "error" && last_error
-          # Find and remove the last user message that caused the error
-          # This allows the user to retry with a different prompt
-          last_user_index = @messages.rindex { |m| m[:role] == "user" }
+          # Trim back to just before the last real user message that caused the error
+          last_user_index = @history.last_real_user_index
           if last_user_index
-            @messages = @messages[0...last_user_index]
+            @history.truncate_from(last_user_index)
 
-            # Trigger a hook to notify about the rollback
             @hooks.trigger(:session_rollback, {
               reason: "Previous session ended with error",
               error_message: last_error,
@@ -100,7 +98,7 @@ module Clacky
             verbose: @config.verbose
           },
           stats: stats_data,
-          messages: @messages
+          messages: @history.to_a
         }
       end
 
@@ -108,13 +106,7 @@ module Clacky
       # @param limit [Integer] Number of recent user messages to retrieve (default: 5)
       # @return [Array<String>] Array of recent user message contents
       def get_recent_user_messages(limit: 5)
-        # Filter messages to only include real user messages (exclude system-injected ones)
-        user_messages = @messages.select do |m|
-          m[:role] == "user" && !m[:system_injected]
-        end
-
-        # Extract text content from the last N user messages
-        user_messages.last(limit).map do |msg|
+        @history.real_user_messages.last(limit).map do |msg|
           extract_text_from_content(msg[:content])
         end
       end
@@ -133,7 +125,7 @@ module Clacky
         rounds = []
         current_round = nil
 
-        @messages.each do |msg|
+        @history.to_a.each do |msg|
           role = msg[:role].to_s
 
           # A real user message can have either a String content or an Array content
@@ -254,13 +246,7 @@ module Clacky
         @skill_loader.load_all
 
         fresh_prompt = build_system_prompt
-        system_index = @messages.index { |m| m[:role] == "system" }
-
-        if system_index
-          @messages[system_index] = { role: "system", content: fresh_prompt }
-        else
-          @messages.unshift({ role: "system", content: fresh_prompt })
-        end
+        @history.replace_system_prompt(fresh_prompt)
       rescue StandardError => e
         # Log and continue — a stale system prompt is better than a broken restore
         Clacky::Logger.warn("refresh_system_prompt failed during session restore: #{e.message}")

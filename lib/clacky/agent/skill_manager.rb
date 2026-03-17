@@ -155,9 +155,8 @@ module Clacky
         skill = parsed[:skill]
         arguments = parsed[:arguments]
 
-        # Encrypted brand skills and fork-agent skills must run in an isolated subagent.
-        # Injecting their plaintext into @messages would expose confidential content to the LLM.
-        if skill.encrypted? || skill.fork_agent?
+        # fork_agent skills still run in an isolated subagent.
+        if skill.fork_agent?
           execute_skill_with_subagent(skill, arguments)
           return
         end
@@ -173,23 +172,31 @@ module Clacky
         # real LLM call would find an assistant message at the tail of the history,
         # causing a 400 "invalid message order" error.
         #
+        # For encrypted (brand) skills, both injected messages are marked transient: true
+        # so they are excluded from session.json serialization. The LLM sees the content
+        # during the current session, but it is never persisted to disk.
+        #
         # Final message order:
         #   user:      "/skill-name [args]"          ← real user input
         #   assistant: "[expanded skill content]"    ← system_injected (skill instructions)
         #   user:      "[SYSTEM] Please proceed..."  ← system_injected (Claude compat shim)
-        @messages << {
+        transient = skill.encrypted?
+
+        @history.append({
           role: "assistant",
           content: expanded_content,
           task_id: task_id,
-          system_injected: true
-        }
+          system_injected: true,
+          transient: transient
+        })
 
-        @messages << {
+        @history.append({
           role: "user",
           content: "[SYSTEM] The skill instructions above have been loaded. Please proceed to execute the task now.",
           task_id: task_id,
-          system_injected: true
-        }
+          system_injected: true,
+          transient: transient
+        })
 
         @ui&.show_info("Injected skill content for /#{skill.identifier}")
       end
@@ -293,21 +300,21 @@ module Clacky
           system_prompt_suffix: skill_instructions
         )
 
-        # Run subagent with the actual task as the sole user turn
-        result = subagent.run(arguments)
+        # Run subagent with the actual task as the sole user turn.
+        # If the user typed the skill command with no arguments (e.g. "/jade-appraisal"),
+        # use a generic trigger phrase so the user message is never empty.
+        task_input = arguments.to_s.strip.empty? ? "Please proceed." : arguments
+        result = subagent.run(task_input)
 
         # Generate summary
         summary = generate_subagent_summary(subagent)
 
-        # Insert summary back to parent agent messages (replacing the instruction message)
-        # Find and replace the last message with subagent_instructions flag
-        messages_with_instructions = @messages.select { |m| m[:subagent_instructions] }
-        if messages_with_instructions.any?
-          instruction_msg = messages_with_instructions.last
-          instruction_msg[:content] = summary
-          instruction_msg.delete(:subagent_instructions)
-          instruction_msg[:subagent_result] = true
-          instruction_msg[:skill_name] = skill.identifier
+        # Mutate the subagent_instructions message in-place to become the result summary
+        @history.mutate_last_matching(->(m) { m[:subagent_instructions] }) do |m|
+          m[:content] = summary
+          m.delete(:subagent_instructions)
+          m[:subagent_result] = true
+          m[:skill_name] = skill.identifier
         end
 
         # Log completion
