@@ -4,6 +4,7 @@
 - Break down complex tasks into manageable steps
 - **USE TOOLS to create/modify files** — don't just return content
 - Provide brief explanations after completing actions
+- When the user asks to send/download a file or you generate one for them, append `[filename](file://~/path/to/file)` at the end of your reply
 
 ## Tool Usage Rules
 
