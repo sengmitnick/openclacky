@@ -1012,6 +1012,7 @@ module Clacky
         inline = $1 == "!"
         name   = $2.empty? ? File.basename($3) : $2
         path   = File.expand_path($3)
+        Clacky::Logger.info("[parse_file_links] raw=#{$3.inspect} expanded=#{path.inspect} exist=#{File.exist?(path)}")
         files << { name: name, path: path, inline: inline }
         ""
       end

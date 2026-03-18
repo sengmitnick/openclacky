@@ -35,8 +35,12 @@ module Clacky
 
       def show_assistant_message(content, files:)
         flush_buffer
+        Clacky::Logger.info("[ChannelUI] show_assistant_message files=#{files.size} content_len=#{content.to_s.length}")
         send_text(content) unless content.nil? || content.to_s.strip.empty?
-        files.each { |f| send_file(f[:path], f[:name]) }
+        files.each do |f|
+          Clacky::Logger.info("[ChannelUI] sending file path=#{f[:path].inspect} name=#{f[:name].inspect}")
+          send_file(f[:path], f[:name])
+        end
       end
 
       def show_tool_call(name, args)
@@ -164,8 +168,8 @@ module Clacky
           send_text("File: #{name || File.basename(path)}\n#{path}")
         end
       rescue StandardError => e
-        warn "[ChannelUI] send_file failed (#{@platform}/#{@chat_id}): #{e.message}"
-        send_text("Failed to send file: #{File.basename(path)}")
+        Clacky::Logger.error("[ChannelUI] send_file failed (#{@platform}/#{@chat_id}): #{e.message}")
+        send_text("Failed to send file: #{File.basename(path)}\nError: #{e.message}")
       end
 
       def buffer_line(line)
