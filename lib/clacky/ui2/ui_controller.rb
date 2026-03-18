@@ -357,7 +357,7 @@ module Clacky
 
       # Show assistant message
       # @param content [String] Message content
-      def show_assistant_message(content)
+      def show_assistant_message(content, files:)
         # Filter out thinking tags from models like MiniMax M2.1 that use <think>...</think>
         filtered_content = filter_thinking_tags(content)
         return if filtered_content.nil? || filtered_content.strip.empty?
@@ -1020,13 +1020,13 @@ module Clacky
       # Handle submit action
       private def handle_submit(data)
         # Render user message immediately before running agent
-        unless data[:text].empty? && data[:images].empty?
-          output = @renderer.render_user_message(data[:text], images: data[:images])
+        unless data[:text].empty? && data[:files].empty?
+          output = @renderer.render_user_message(data[:text], files: data[:files])
           append_output(output)
         end
 
         # Then call callback (allows interrupting previous agent before processing new input)
-        @input_callback&.call(data[:text], data[:images])
+        @input_callback&.call(data[:text], data[:files])
       end
 
       # Show configuration modal dialog with multi-model support

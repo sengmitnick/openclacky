@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-03-18
+
+### Added
+- **Environment-aware context injection**: the agent now automatically detects your OS, desktop environment, and screen info and includes it in every session — so it can give OS-specific advice without you having to explain your setup
+- **File attachments via IM channels**: you can now send images and documents directly through Feishu or WeCom to the agent, which processes them just like files sent via the Web UI
+- **Unified file attachment pipeline for Web UI**: images and Office/PDF documents can now be attached in the web chat interface with automatic image compression before upload
+- **Skills can now be installed from local zip files**: `skill-add` now accepts a local file path (not just a URL), so you can install skills from a downloaded zip without hosting it anywhere
+- **Skill import bar in Web UI**: the Skills settings page now has an import bar where you can paste a URL or upload a local zip file directly — no terminal needed to install new skills
+- **`$SKILL_DIR` available in skill instructions**: skill files can now reference `$SKILL_DIR` to get the absolute path to their own directory, making it easy to reference supporting files with correct paths
+- **`product-help` built-in skill**: the agent can now answer questions about Clacky's own features, configuration, and usage through a dedicated built-in skill
+
+### Fixed
+- **PDF and Office files now appear in glob results**: file discovery tools no longer skip `.pdf`, `.docx`, and other document formats — they show up correctly in file listings
+- **Chat history visible after message compression**: sessions where all user messages were compressed no longer show a blank history — prior conversation is now correctly replayed
+- **Stale message reference in task history**: an internal bug (`@messages` vs `@history`) that could cause incorrect task history in compressed sessions is fixed
+- **File-only messages handled correctly in channel UI**: sending a file without text via IM channels no longer causes a display issue in the channel UI
+- **WeCom WebSocket client stability**: fixed async dispatch and frame acknowledgment in the WeCom WS client to reduce dropped messages and connection issues
+- **Session serializer variable fix**: corrected a stale variable reference in session replay that could cause errors when restoring sessions
+- **`web_fetch` compatibility improved**: better request headers make web page fetching more reliable across more sites
+- **Reasoning content preserved in API messages**: `reasoning_content` fields are no longer stripped from messages, fixing potential issues with reasoning-capable models
+
+### More
+- Markdown links in chat now open in a new tab
+- Removed public skill store tab from the Skills panel (store content is now integrated differently)
+- Reduce WebSocket ping log noise in HTTP server
+- Centralize message cleanup logic in `MessageHistory`
+
 ## [0.9.5] - 2026-03-17
 
 ### Added

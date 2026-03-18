@@ -90,7 +90,8 @@ module Clacky
             active_task_id: @active_task_id || 0
           },
           config: {
-            models: @config.models,
+            # NOTE: api_key and other sensitive credentials are intentionally excluded
+            # to prevent leaking secrets into session files on disk.
             permission_mode: @config.permission_mode.to_s,
             enable_compression: @config.enable_compression,
             enable_prompt_caching: @config.enable_prompt_caching,
@@ -121,7 +122,7 @@ module Clacky
       #   created_at < before. Pass nil to get the most recent rounds.
       # @return [Hash] { has_more: Boolean } — whether older rounds exist beyond this page
       def replay_history(ui, limit: 20, before: nil)
-        # Split @messages into rounds, each starting at a real user message
+        # Split @history into rounds, each starting at a real user message
         rounds = []
         current_round = nil
 
@@ -170,11 +171,9 @@ module Clacky
 
         page.each do |round|
           msg = round[:user_msg]
-          display_text = extract_text_from_content(msg[:content])
-          # Extract image data URLs from multipart content (for history replay rendering)
-          images = extract_images_from_content(msg[:content])
-          # Emit user message with its timestamp for dedup on the frontend
-          ui.show_user_message(display_text, created_at: msg[:created_at], images: images)
+          raw_text = extract_text_from_content(msg[:content])
+          # Files are stored as system_injected messages (skipped below), not embedded in user text.
+          ui.show_user_message(raw_text, created_at: msg[:created_at])
 
           round[:events].each do |ev|
             # Skip system-injected messages (e.g. synthetic skill content, memory prompts)
@@ -199,7 +198,7 @@ module Clacky
         when "assistant"
           # Text content
           text = extract_text_from_content(msg[:content]).to_s.strip
-          ui.show_assistant_message(text) unless text.empty?
+          ui.show_assistant_message(text, files: []) unless text.empty?
 
           # Tool calls embedded in assistant message
           Array(msg[:tool_calls]).each do |tc|
@@ -211,7 +210,7 @@ module Clacky
             # assistant message (matching real-time behavior), not as a tool call.
             if name == "request_user_feedback"
               question = args.is_a?(Hash) ? (args[:question] || args["question"]).to_s : ""
-              ui.show_assistant_message(question) unless question.empty?
+              ui.show_assistant_message(question, files: []) unless question.empty?
             else
               ui.show_tool_call(name, args)
             end

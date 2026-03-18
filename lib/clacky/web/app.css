@@ -1936,29 +1936,146 @@ body {
   margin: 0;
   line-height: 1.5;
 }
-.btn-create-skill {
+/* Two action buttons: Import (outlined) + Create (solid) */
+.skill-action-btns {
   position: absolute;
   top: 0;
   right: 0;
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+/* Shared base for both buttons */
+.btn-import-skill,
+.btn-create-skill {
+  display: flex;
+  align-items: center;
   gap: 6px;
-  padding: 8px 16px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.15s ease, border-color 0.2s ease;
+}
+/* Import — outlined style */
+.btn-import-skill {
+  background: transparent;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-primary);
+}
+.btn-import-skill:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+  transform: translateY(-1px);
+}
+.btn-import-skill:active { transform: translateY(0); }
+/* Create — solid primary style */
+.btn-create-skill {
   background: var(--color-button-primary);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.2s ease, transform 0.15s ease;
 }
 .btn-create-skill:hover {
   background: var(--color-button-primary-hover);
   transform: translateY(-1px);
 }
-.btn-create-skill:active {
-  transform: translateY(0);
+.btn-create-skill:active { transform: translateY(0); }
+
+/* ── Inline Import Bar ─────────────────────────────────────────────────── */
+.skill-import-bar {
+  padding: 10px 0 6px;
+  border-bottom: 1px solid var(--color-border-primary);
+  margin-bottom: 4px;
+  animation: skill-import-bar-in 0.15s ease;
+}
+@keyframes skill-import-bar-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.skill-import-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  padding: 6px 10px;
+  transition: border-color 0.15s;
+}
+.skill-import-bar-inner:focus-within {
+  border-color: var(--color-accent-primary);
+}
+.skill-import-link-icon {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+}
+.skill-import-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  min-width: 0;
+}
+.skill-import-input::placeholder {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+.skill-import-input.skill-import-input-error {
+  animation: skill-import-shake 0.3s ease;
+  color: var(--color-error, #e53e3e);
+}
+@keyframes skill-import-shake {
+  0%, 100% { transform: translateX(0); }
+  25%       { transform: translateX(-4px); }
+  75%       { transform: translateX(4px); }
+}
+.btn-skill-import-confirm {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  background: var(--color-button-primary);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.btn-skill-import-confirm:hover { background: var(--color-button-primary-hover); }
+.btn-skill-import-browse {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s, background 0.15s;
+}
+.btn-skill-import-browse:hover {
+  color: var(--color-accent-primary);
+  background: var(--color-bg-tertiary);
+}
+.btn-skill-import-cancel {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.btn-skill-import-cancel:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
 }
 
 /* ── Skills Tabs ─────────────────────────────────────────────────────────── */
@@ -2384,6 +2501,39 @@ body {
   padding: 24px 0;
 }
 .brand-skills-error { color: var(--color-error); }
+
+/* Unlicensed state — shown when brand is set but license is not activated */
+.brand-skills-unlicensed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 36px 24px;
+  text-align: center;
+}
+.brand-skills-unlicensed-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+.brand-skills-unlicensed-msg {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.brand-skills-activate-btn {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--color-accent, #6366f1);
+  color: var(--color-accent, #6366f1);
+  background: transparent;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.brand-skills-activate-btn:hover {
+  background: var(--color-accent, #6366f1);
+  color: #fff;
+}
 
 /* Soft warning banner — shown when remote API is unavailable but local skills are displayed */
 .brand-skills-warning {

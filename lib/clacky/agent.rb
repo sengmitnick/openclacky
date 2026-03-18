@@ -6,6 +6,7 @@ require "tty-prompt"
 require "set"
 require_relative "utils/arguments_parser"
 require_relative "utils/file_processor"
+require_relative "utils/environment_detector"
 
 # Load all agent modules
 require_relative "agent/message_compressor"
@@ -151,7 +152,7 @@ module Clacky
       @name = new_name.to_s.strip
     end
 
-    def run(user_input, images: [], files: [])
+    def run(user_input, files: [])
       # Start new task for Time Machine
       task_id = start_new_task
 
@@ -178,10 +179,37 @@ module Clacky
       # Inject session context (date + model) if not yet present or date has changed
       inject_session_context_if_needed
 
-      # Format user message with images and files if provided
-      user_content = format_user_content(user_input, images, files)
+      # Split files into vision images and disk files; downgrade oversized images to disk
+      image_files, disk_files = partition_files(Array(files))
+      vision_urls, downgraded  = resolve_vision_images(image_files)
+      all_disk_files = disk_files + downgraded
+
+      # Format user message — text + inline vision images
+      user_content = format_user_content(user_input, vision_urls)
       @history.append({ role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f })
       @total_tasks += 1
+
+      # Inject disk file references as a system_injected message so:
+      #   - LLM sees the file info (system_injected is NOT stripped from to_api)
+      #   - replay_history skips it (next if ev[:system_injected]), keeping the user bubble clean
+      unless all_disk_files.empty?
+        file_prompt = all_disk_files.filter_map do |f|
+          path         = f[:path]         || f["path"]
+          name         = f[:name]         || f["name"]
+          type         = f[:type]         || f["type"]
+          preview_path = f[:preview_path] || f["preview_path"]
+          next unless path && name
+
+          lines = ["[File: #{name}]", "Type: #{type || "file"}"]
+          lines << "Original: #{path}"
+          lines << "Preview (Markdown): #{preview_path}" if preview_path
+          lines.join("\n")
+        end.join("\n\n")
+
+        unless file_prompt.empty?
+          @history.append({ role: "user", content: file_prompt, system_injected: true, task_id: task_id })
+        end
+      end
 
       # If the user typed a slash command targeting a skill with disable-model-invocation: true,
       # inject the skill content as a synthetic assistant message so the LLM can act on it.
@@ -218,7 +246,7 @@ module Clacky
             if @memory_updating && response[:content] && !response[:content].empty?
               @ui&.show_info(response[:content].strip)
             elsif response[:content] && !response[:content].empty?
-              @ui&.show_assistant_message(response[:content])
+              emit_assistant_message(response[:content])
             end
 
             # Show token usage after the assistant message so WebUI renders it below the bubble
@@ -243,7 +271,7 @@ module Clacky
           # Show assistant message if there's content before tool calls
           # During memory update phase, suppress text output (only tool calls matter)
           if response[:content] && !response[:content].empty? && !@memory_updating
-            @ui&.show_assistant_message(response[:content])
+            emit_assistant_message(response[:content])
           end
 
           # Show token usage after assistant message (or immediately if no message).
@@ -277,7 +305,7 @@ module Clacky
               next
             else
               # User just said "no" without feedback - stop and wait
-              @ui&.show_assistant_message("Tool execution was denied. Please give more instructions...")
+              @ui&.show_assistant_message("Tool execution was denied. Please give more instructions...", files: [])
               break
             end
           end
@@ -350,12 +378,9 @@ module Clacky
           handle_compression_response(response, compression_context)
           compression_handled = true
         ensure
-          # If interrupted or failed, remove the dangling compression message so it
-          # doesn't pollute future conversation turns.
-          unless compression_handled
-            @history.pop_while { |m| m[:system_injected] && !m.equal?(compression_message) }
-            @history.pop_last if @history.to_a.last&.equal?(compression_message)
-          end
+          # If interrupted or failed, roll back the speculative compression message
+          # so it doesn't pollute future conversation turns.
+          @history.rollback_before(compression_message) unless compression_handled
         end
         return nil
       end
@@ -565,7 +590,7 @@ module Clacky
           # Special handling for request_user_feedback: show directly as message
           if call[:name] == "request_user_feedback"
             if result.is_a?(Hash) && result[:message]
-              @ui&.show_assistant_message(result[:message])
+              @ui&.show_assistant_message(result[:message], files: [])
             end
 
             if @config.permission_mode == :auto_approve
@@ -756,13 +781,9 @@ module Clacky
       subagent.instance_variable_set(:@previous_total_tokens, @previous_total_tokens)
 
       # Deep clone history to avoid cross-contamination.
-      # to_api already strips trailing orphaned tool_calls; we use to_a here so the
-      # subagent gets the full internal list and its own to_api handles the strip on send.
+      # Dangling tool_calls (no tool_result yet) are cleaned up automatically by
+      # MessageHistory#append when the subagent appends its first user message.
       cloned_messages = deep_clone(@history.to_a)
-      # Strip pending tool_calls (no tool_result yet) — fork happens inside act(),
-      # before observe() has appended tool results. Anthropic rejects orphaned tool_use.
-      cloned_messages.pop if cloned_messages.last&.dig(:role) == "assistant" &&
-                             cloned_messages.last[:tool_calls]&.any?
       subagent.instance_variable_set(:@history, MessageHistory.new(cloned_messages))
 
       # Append system prompt suffix as user message (for cache reuse)
@@ -861,24 +882,85 @@ module Clacky
     # @param images [Array<String>] Array of image file paths or data: URLs
     # @param files [Array] Unused — kept for signature compatibility
     # @return [String|Array] String if no images, Array with content blocks otherwise
-    private def format_user_content(text, images, files = [])
-      images ||= []
+    # Partition files array into [image_files, non_image_files].
+    # Image files: have mime_type starting with "image/" OR have data_url present.
+    private def partition_files(files)
+      image_files = []
+      non_image_files = []
+      files.each do |f|
+        mime = f[:mime_type] || f["mime_type"] || ""
+        data_url = f[:data_url] || f["data_url"]
+        if mime.start_with?("image/") || data_url
+          image_files << f
+        else
+          non_image_files << f
+        end
+      end
+      [image_files, non_image_files]
+    end
 
-      return text if images.empty?
+    # Resolve image files to vision data_urls.
+    # Files with data_url: use as-is (already compressed by frontend or adapter).
+    # Files with path: convert to data_url via FileProcessor.
+    # Oversized images (> MAX_IMAGE_BYTES) are downgraded to disk file refs.
+    # @return [Array<String>, Array<Hash>] [vision_urls, downgraded_disk_files]
+    private def resolve_vision_images(image_files)
+      require "base64"
+      max_bytes = Utils::FileProcessor::MAX_IMAGE_BYTES
+      vision_urls = []
+      downgraded  = []
+
+      image_files.each do |f|
+        name     = f[:name]     || f["name"]     || "image.jpg"
+        mime     = f[:mime_type] || f["mime_type"] || "image/jpeg"
+        data_url = f[:data_url]  || f["data_url"]
+        path     = f[:path]      || f["path"]
+
+        if data_url
+          # Strip header to check byte size: "data:image/jpeg;base64,<data>"
+          b64_data = data_url.split(",", 2).last.to_s
+          byte_size = (b64_data.bytesize * 3) / 4
+          if byte_size > max_bytes
+            # Downgrade: save to disk
+            raw      = Base64.decode64(b64_data)
+            file_ref = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
+            downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime }
+          else
+            vision_urls << data_url
+          end
+        elsif path
+          begin
+            data_url_from_path = Utils::FileProcessor.image_path_to_data_url(path)
+            b64_data = data_url_from_path.split(",", 2).last.to_s
+            byte_size = (b64_data.bytesize * 3) / 4
+            if byte_size > max_bytes
+              raw      = Base64.decode64(b64_data)
+              file_ref = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
+              downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime }
+            else
+              vision_urls << data_url_from_path
+            end
+          rescue => e
+            @ui&.log("Failed to load image #{name}: #{e.message}", level: :warn)
+          end
+        end
+      end
+
+      [vision_urls, downgraded]
+    end
+
+    # Build user message content for LLM.
+    # Returns plain String when no vision images; Array of content parts otherwise.
+    private def format_user_content(text, vision_urls)
+      vision_urls ||= []
+
+      return text if vision_urls.empty?
 
       content = []
       content << { type: "text", text: text } unless text.nil? || text.empty?
-
-      images.each do |image|
-        # Accept both file paths and pre-encoded data: URLs (e.g. from Web UI)
-        image_url = if image.start_with?("data:")
-                      image
-                    else
-                      Utils::FileProcessor.image_path_to_data_url(image)
-                    end
-        content << { type: "image_url", image_url: { url: image_url } }
+      vision_urls.each do |url|
+        content << { type: "image_url", image_url: { url: url } }
       end
-
       content
     end
 
@@ -896,7 +978,17 @@ module Clacky
       # Skip if we already have a context for today
       return if @history.last_session_context_date == today
 
-      content = "[Session context: Today is #{Time.now.strftime('%Y-%m-%d, %A')}. Current model: #{current_model}. Working directory: #{@working_dir}]"
+      os      = Clacky::Utils::EnvironmentDetector.os_type
+      desktop = Clacky::Utils::EnvironmentDetector.desktop_path
+      parts   = [
+        "Today is #{Time.now.strftime('%Y-%m-%d, %A')}",
+        "Current model: #{current_model}",
+        os != :unknown ? "OS: #{Clacky::Utils::EnvironmentDetector.os_label}" : nil,
+        desktop ? "Desktop: #{desktop}" : nil,
+        @working_dir ? "Working directory: #{@working_dir}" : nil
+      ].compact.join(". ")
+
+      content = "[Session context: #{parts}]"
       @history.append({
         role: "user",
         content: content,
@@ -904,6 +996,36 @@ module Clacky
         session_context: true,
         session_date: today
       })
+    end
+
+    # Parse markdown file:// links from assistant message content.
+    # Handles both regular links and inline images:
+    #   [Download report](file:///path/to/file.pdf)
+    #   ![chart](file:///path/to/chart.png)
+    #
+    # Returns { text: String, files: Array<{name:, path:, inline:}> }
+    # File links are stripped from the returned text.
+    private def parse_file_links(content)
+      return { text: content, files: [] } if content.nil? || content.empty?
+
+      files = []
+      text = content.gsub(/(!?)\[([^\]]*)\]\(file:\/\/([^)]+)\)/) do
+        inline = $1 == "!"
+        name   = $2.empty? ? File.basename($3) : $2
+        path   = File.expand_path($3)
+        Clacky::Logger.info("[parse_file_links] raw=#{$3.inspect} expanded=#{path.inspect} exist=#{File.exist?(path)}")
+        files << { name: name, path: path, inline: inline }
+        ""
+      end
+      { text: text.strip, files: files }
+    end
+
+    # Emit assistant message to UI, parsing any embedded file:// links first.
+    private def emit_assistant_message(content)
+      return if content.nil? || content.empty?
+
+      parsed = parse_file_links(content)
+      @ui&.show_assistant_message(parsed[:text], files: parsed[:files])
     end
 
     # Track modified files for Time Machine snapshots

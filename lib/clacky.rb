@@ -33,7 +33,7 @@ require_relative "clacky/utils/path_helper"
 require_relative "clacky/utils/file_ignore_helper"
 require_relative "clacky/utils/string_matcher"
 require_relative "clacky/tools/base"
-require_relative "clacky/utils/file_attachment"
+require_relative "clacky/utils/file_processor"
 
 require_relative "clacky/tools/shell"
 require_relative "clacky/tools/file_reader"
@@ -62,5 +62,6 @@ require_relative "clacky/cli"
 module Clacky
   class AgentInterrupted < Exception; end  # Inherit from Exception to bypass rescue StandardError
   class AgentError < StandardError; end
+  class RetryableError < StandardError; end  # Transient errors that should be retried (5xx, HTML response, rate limit)
   class ToolCallError < AgentError; end  # Raised when tool call fails due to invalid parameters
 end
