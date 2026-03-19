@@ -16,8 +16,10 @@ module Clacky
     #   npx -y chrome-devtools-mcp@latest --autoConnect --experimentalStructuredContent
     #       --experimental-page-id-routing [--userDataDir <path>]
     #
-    # Communication: MCP stdio JSON-RPC 2.0 — the tool spawns a short-lived MCP
-    # process per tool invocation (stateless) or reuses a persistent session.
+    # Communication: MCP stdio JSON-RPC 2.0 over a *persistent* (daemon) process.
+    # The MCP server process is started once, kept alive across all tool calls,
+    # and only restarted when the process dies unexpectedly.  This means Chrome
+    # shows the "Allow remote debugging" dialog exactly once per daemon lifetime.
     #
     # No agent-browser, no DevToolsActivePort, no CDP port management.
     class Browser < Base
@@ -152,6 +154,17 @@ module Clacky
 
       MAX_SNAPSHOT_CHARS   = 4000
       MAX_LLM_OUTPUT_CHARS = 6000
+
+      # ---------------------------------------------------------------------------
+      # Class-level persistent MCP daemon state
+      # ---------------------------------------------------------------------------
+      # @@mcp_process holds the running daemon's IO handles and PID:
+      #   { stdin: IO, stdout: IO, pid: Integer, wait_thr: Thread }
+      # @@mcp_mutex guards all access to avoid race conditions in multi-thread envs.
+      # @@mcp_call_id is an ever-increasing JSON-RPC id counter.
+      @@mcp_process = nil
+      @@mcp_mutex   = Mutex.new
+      @@mcp_call_id = 2  # 1 is reserved for the initialize handshake
 
       def execute(action:, profile: nil, working_dir: nil, **opts)
         use_user = profile.to_s == "user"
@@ -442,61 +455,48 @@ module Clacky
         [env, npx_path, *args]
       end
 
-      # Calls a Chrome MCP tool using the correct MCP stdio JSON-RPC protocol.
+      # Calls a Chrome MCP tool over the persistent daemon process.
+      #
+      # On the first call (or after the daemon dies), `ensure_mcp_process!` starts
+      # a new npx process and completes the MCP initialize handshake.  Subsequent
+      # calls reuse the same process — Chrome's "Allow remote debugging" dialog is
+      # shown exactly once per daemon lifetime.
       #
       # Protocol sequence (per MCP spec):
-      #   1. client  → initialize
-      #   2. server  → initialize result
-      #   3. client  → notifications/initialized (notification, no id)
-      #   4. client  → tools/call
-      #   5. server  → tools/call result
+      #   Handshake (once on daemon start):
+      #     1. client → initialize
+      #     2. server → initialize result
+      #     3. client → notifications/initialized
+      #   Per call (reusing the same process):
+      #     4. client → tools/call  (with unique id)
+      #     5. server → tools/call result
       #
-      # Uses Open3.popen3 for bidirectional stdio communication.
-      # Each call spawns a short-lived MCP process (stateless per-call).
+      # Thread safety: all state mutations are protected by @@mcp_mutex.
       private def mcp_call(tool_name, arguments = {}, user_data_dir: nil)
-        cmd = build_mcp_command(user_data_dir: user_data_dir)
+        call_resp = nil
 
-        init_msg   = mcp_json_rpc("initialize", {
-          protocolVersion: "2024-11-05",
-          capabilities:    {},
-          clientInfo:      { name: "clacky", version: "1.0" }
-        }, id: 1)
+        @@mcp_mutex.synchronize do
+          # Ensure the daemon is alive (start + handshake if needed)
+          ensure_mcp_process!(user_data_dir: user_data_dir)
 
-        notify_msg = JSON.generate({
-          jsonrpc: "2.0",
-          method:  "notifications/initialized",
-          params:  {}
-        })
+          proc_state = @@mcp_process
+          call_id    = @@mcp_call_id
+          @@mcp_call_id += 1
 
-        call_msg = mcp_json_rpc("tools/call", {
-          name:      tool_name,
-          arguments: arguments
-        }, id: 2)
+          call_msg = mcp_json_rpc("tools/call", {
+            name:      tool_name,
+            arguments: arguments
+          }, id: call_id)
 
-        Open3.popen3(*cmd) do |stdin, stdout, stderr_io, wait_thr|
-          # --- Step 1: send initialize ---
-          stdin.write(init_msg + "\n")
-          stdin.flush
+          proc_state[:stdin].write(call_msg + "\n")
+          proc_state[:stdin].flush
 
-          init_resp = mcp_read_response(stdout, target_id: 1, timeout: MCP_HANDSHAKE_TIMEOUT)
-          unless init_resp
-            Process.kill("TERM", wait_thr.pid) rescue nil
-            raise "Chrome MCP initialize handshake timed out"
-          end
-
-          # --- Step 2: send initialized notification ---
-          stdin.write(notify_msg + "\n")
-          stdin.flush
-
-          # --- Step 3: send tool call ---
-          stdin.write(call_msg + "\n")
-          stdin.flush
-
-          call_resp = mcp_read_response(stdout, target_id: 2, timeout: MCP_CALL_TIMEOUT)
-
-          Process.kill("TERM", wait_thr.pid) rescue nil
+          call_resp = mcp_read_response(proc_state[:stdout], target_id: call_id,
+                                        timeout: MCP_CALL_TIMEOUT)
 
           unless call_resp
+            # Daemon may have died — clean up so next call restarts it
+            kill_mcp_process!
             raise "Chrome MCP tools/call '#{tool_name}' timed out after #{MCP_CALL_TIMEOUT}s"
           end
 
@@ -516,6 +516,96 @@ module Clacky
           end
 
           result
+        end
+      end
+
+      # ---------------------------------------------------------------------------
+      # Daemon process management (called from within @@mcp_mutex)
+      # ---------------------------------------------------------------------------
+
+      # Ensures the persistent MCP daemon process is running and the MCP handshake
+      # has been completed.  If the process is dead or was never started, a new one
+      # is spawned and the initialize/initialized sequence is executed.
+      #
+      # Must be called while holding @@mcp_mutex.
+      private def ensure_mcp_process!(user_data_dir: nil)
+        return if mcp_process_alive?
+
+        cmd = build_mcp_command(user_data_dir: user_data_dir)
+
+        stdin, stdout, stderr_io, wait_thr = Open3.popen3(*cmd)
+        # Discard stderr asynchronously to avoid pipe buffer deadlocks
+        Thread.new { stderr_io.read rescue nil }
+
+        # MCP handshake: initialize → result → notifications/initialized
+        init_msg = mcp_json_rpc("initialize", {
+          protocolVersion: "2024-11-05",
+          capabilities:    {},
+          clientInfo:      { name: "clacky", version: "1.0" }
+        }, id: 1)
+
+        notify_msg = JSON.generate({
+          jsonrpc: "2.0",
+          method:  "notifications/initialized",
+          params:  {}
+        })
+
+        stdin.write(init_msg + "\n")
+        stdin.flush
+
+        init_resp = mcp_read_response(stdout, target_id: 1, timeout: MCP_HANDSHAKE_TIMEOUT)
+        unless init_resp
+          Process.kill("TERM", wait_thr.pid) rescue nil
+          raise "Chrome MCP initialize handshake timed out"
+        end
+
+        stdin.write(notify_msg + "\n")
+        stdin.flush
+
+        # Handshake complete — store daemon state at class level
+        @@mcp_process = { stdin: stdin, stdout: stdout, pid: wait_thr.pid, wait_thr: wait_thr }
+        # Reset call id counter (id=1 already used for initialize)
+        @@mcp_call_id = 2
+      end
+
+      # Returns true if the daemon process is running and its stdin/stdout are open.
+      # Must be called while holding @@mcp_mutex.
+      private def mcp_process_alive?
+        return false if @@mcp_process.nil?
+
+        ps = @@mcp_process
+        # Check whether the process is still alive via kill(0)
+        Process.kill(0, ps[:pid])
+        !ps[:stdin].closed? && !ps[:stdout].closed?
+      rescue Errno::ESRCH, Errno::EPERM
+        # Process gone — clean up stale state
+        kill_mcp_process!
+        false
+      end
+
+      # Forcibly terminates the daemon process and clears class-level state.
+      # Safe to call even when @@mcp_process is nil.
+      # Must be called while holding @@mcp_mutex (or during teardown).
+      private def kill_mcp_process!
+        ps = @@mcp_process
+        return unless ps
+
+        Process.kill("TERM", ps[:pid]) rescue nil
+        ps[:stdin].close  rescue nil
+        ps[:stdout].close rescue nil
+        @@mcp_process = nil
+      end
+
+      # Public class-level method to shut down the daemon (e.g. at exit or in tests).
+      def self.stop_mcp_process!
+        @@mcp_mutex.synchronize do
+          ps = @@mcp_process
+          return unless ps
+
+          Process.kill("TERM", ps[:pid]) rescue nil
+          ps[:stdin].close  rescue nil
+          ps[:stdout].close rescue nil
+          @@mcp_process = nil
         end
       end
 
