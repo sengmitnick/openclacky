@@ -368,9 +368,10 @@ RSpec.describe Clacky::Tools::Browser do
       expect(required).to include("action")
     end
 
-    it "supports user and sandbox profiles" do
+    it "supports only the user profile" do
       profile_enum = described_class.tool_parameters.dig(:properties, :profile, :enum)
-      expect(profile_enum).to include("user", "sandbox")
+      expect(profile_enum).to eq(%w[user])
+      expect(profile_enum).not_to include("sandbox")
     end
   end
 

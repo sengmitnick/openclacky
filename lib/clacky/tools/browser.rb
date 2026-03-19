@@ -28,9 +28,7 @@ module Clacky
         Control the browser for automation tasks (login, form submission, UI interaction, scraping).
         For simple page fetch or search, prefer web_fetch or web_search instead.
 
-        PROFILES — choose the right browser context:
-        - profile="user"    → your real browser (Chrome/Edge/Brave) with existing logins & cookies. Requires Chrome 146+.
-        - profile="sandbox" → isolated sandboxed browser (default, no cookies).
+        Uses your real Chrome browser (profile="user") with existing logins & cookies. Requires Chrome 146+.
 
         ACTIONS OVERVIEW:
         - snapshot   → get accessibility tree with element refs. ALWAYS run before interacting.
@@ -69,8 +67,8 @@ module Clacky
           },
           profile: {
             type: "string",
-            enum: %w[sandbox user],
-            description: "Browser profile. 'user' = real browser (Chrome 146+). 'sandbox' = isolated (default)."
+            enum: %w[user],
+            description: "Browser profile. Only 'user' is supported — uses your real Chrome browser with existing logins & cookies."
           },
           interactive: {
             type: "boolean",
@@ -167,15 +165,13 @@ module Clacky
       @@mcp_call_id = 2  # 1 is reserved for the initialize handshake
 
       def execute(action:, profile: nil, working_dir: nil, **opts)
-        use_user = profile.to_s == "user"
-
-        if use_user
-          execute_user_browser(action, opts)
-        else
-          execute_sandbox(action, opts)
-        end
+        execute_user_browser(action, opts)
       rescue StandardError => e
-        { error: "Browser error: #{e.message}" }
+        if chrome_not_running_error?(e.message)
+          { error: CHROME_SETUP_GUIDE }
+        else
+          { error: "Browser error: #{e.message}" }
+        end
       end
 
       def format_call(args)
@@ -216,11 +212,89 @@ module Clacky
       # User browser (Chrome MCP / existing-session driver)
       # -----------------------------------------------------------------------
 
+      # Friendly setup guide returned when Chrome is not installed or not running.
+      # Shown to the user (and Agent) when Chrome remote debugging is not enabled.
+      # The strong wording ("STOP", "DO NOT") is intentional — it prevents the
+      # Agent from silently falling back to web_search or other workarounds.
+      CHROME_SETUP_GUIDE = <<~GUIDE.freeze
+        ⚠️  IMPORTANT — STOP and read this before doing anything else.
+
+        Chrome remote debugging is not enabled. You MUST ask the user to enable it
+        before retrying. Do NOT fall back to web_search or any other workaround.
+
+        Please tell the user:
+
+        ──────────────────────────────────────────────────
+        Chrome 还没有开启远程调试，需要你做一个操作：
+
+        1. 打开 Chrome，在地址栏输入：
+              chrome://inspect/#remote-debugging
+           按回车
+
+        2. 勾选 "Discover network targets"（如果没有勾选的话）
+
+        3. 下次 Clacky 控制浏览器时，Chrome 会弹出一个授权对话框，
+           点击「允许」即可。
+
+        完成后告诉我，我来重试。
+        ──────────────────────────────────────────────────
+
+        After the user confirms, retry the original browser action.
+      GUIDE
+
+      # Returns true if Google Chrome appears to be installed on this machine.
+      private def chrome_installed?
+        case RbConfig::CONFIG["host_os"]
+        when /darwin/
+          File.exist?("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") ||
+            File.exist?(File.expand_path("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
+        when /mswin|mingw|windows/i
+          local = ENV.fetch("LOCALAPPDATA", "")
+          prog  = ENV.fetch("ProgramFiles", "C:\Program Files")
+          prog86 = ENV.fetch("ProgramFiles(x86)", "C:\Program Files (x86)")
+          File.exist?(File.join(local, "Google", "Chrome", "Application", "chrome.exe")) ||
+            File.exist?(File.join(prog, "Google", "Chrome", "Application", "chrome.exe")) ||
+            File.exist?(File.join(prog86, "Google", "Chrome", "Application", "chrome.exe"))
+        else # linux
+          system("which google-chrome > /dev/null 2>&1") ||
+            system("which google-chrome-stable > /dev/null 2>&1") ||
+            File.exist?("/usr/bin/google-chrome") ||
+            File.exist?("/usr/bin/google-chrome-stable")
+        end
+      end
+
+      # Returns true if the error message from chrome-devtools-mcp indicates
+      # that Chrome is not running or remote debugging is not enabled.
+      private def chrome_not_running_error?(message)
+        msg = message.to_s.downcase
+        msg.include?("could not connect to chrome") ||
+          msg.include?("devtoolsactiveport") ||
+          msg.include?("remote debugging") ||
+          msg.include?("chrome is running")
+      end
+
       private def execute_user_browser(action, opts)
         unless chrome_mcp_available?
           return {
             error: "chrome-devtools-mcp requires Node.js and npx. " \
                    "Install Node.js 18+ and ensure 'npx' is in PATH."
+          }
+        end
+
+        unless chrome_installed?
+          return {
+            error: <<~MSG
+              ⚠️  IMPORTANT — STOP and tell the user:
+
+              ──────────────────────────────────────────────────
+              浏览器自动化需要安装 Google Chrome。
+
+              请先安装 Chrome：https://www.google.com/chrome/
+              安装完成后告诉我，我来重试。
+              ──────────────────────────────────────────────────
+
+              Do NOT fall back to web_search or any other workaround.
+            MSG
           }
         end
 
@@ -392,13 +466,6 @@ module Clacky
       # -----------------------------------------------------------------------
       # Sandbox browser (agent-browser fallback — not Chrome MCP)
       # -----------------------------------------------------------------------
-
-      private def execute_sandbox(action, opts)
-        {
-          error: "Sandbox profile is not yet supported in this version. " \
-                 "Use profile=\"user\" with Chrome 146+."
-        }
-      end
 
       # -----------------------------------------------------------------------
       # Chrome MCP — process management & JSON-RPC over stdio
