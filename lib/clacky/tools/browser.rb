@@ -520,6 +520,11 @@ module Clacky
         ab_command = build_action_command(action, opts, real_browser: cdp_ws_url)
 
         if cdp_ws_url
+          # If the user-browser daemon is already running but connected to a
+          # stale CDP port (e.g. browser was restarted and got a new port/UUID),
+          # kill it so the next invocation starts fresh with the new --cdp URL.
+          ensure_user_browser_daemon_on_correct_port(cdp_ws_url)
+
           full_command = build_command(ab_command, cdp_ws_url: cdp_ws_url)
           result = Shell.new.execute(command: full_command,
                                      hard_timeout: BROWSER_COMMAND_TIMEOUT,
@@ -961,11 +966,117 @@ module Clacky
       # Command building
       # -----------------------------------------------------------------------
 
+      # Dedicated session name for the user-browser daemon.
+      # Using an isolated --session ensures the agent-browser daemon that connects
+      # to the user's real browser (via CDP) is never shared with the sandbox daemon.
+      # Without this, subsequent calls reuse the already-running sandbox daemon and
+      # the --cdp flag has no effect (daemon ignores it after the first launch).
+      USER_BROWSER_SESSION = "clacky_user_browser"
+
+      # Ensure the user-browser daemon is connected to the correct CDP port.
+      #
+      # The daemon connects to the user's real browser (e.g. Edge) on a specific
+      # local port. We must restart it when:
+      #   (a) The browser restarted → new port / WS UUID in DevToolsActivePort
+      #   (b) The connection died (CLOSE_WAIT / CLOSED) → daemon would fail next call
+      #
+      # Strategy:
+      #   1. Find daemon PIDs via the session's Unix socket file.
+      #   2. Parse the expected port from the cdp_ws_url.
+      #   3. If any daemon has a stale/dead connection → close the session daemon.
+      #      The next command invocation will start a fresh daemon with the new URL.
+      #
+      # We do nothing when we cannot determine the daemon's state (avoids false
+      # restarts when lsof temporarily fails).
+      private def ensure_user_browser_daemon_on_correct_port(cdp_ws_url)
+        expected_port = URI(cdp_ws_url).port rescue nil
+        return unless expected_port
+
+        # Find agent-browser daemon PIDs for our session.
+        daemon_pids = user_browser_daemon_pids
+        return if daemon_pids.empty?
+
+        # Check if any daemon has a stale connection:
+        #   - connected to a different port (browser restarted and got a new port), OR
+        #   - connection is dead (CLOSE_WAIT / CLOSED — daemon will fail on next command)
+        stale = daemon_pids.any? do |pid|
+          conn = daemon_tcp_connection(pid)
+          conn && (!conn[:alive] || conn[:port] != expected_port)
+        end
+
+        if stale
+          # Close the stale user-browser daemon so the next invocation reconnects.
+          Shell.new.execute(
+            command: "#{AGENT_BROWSER_BIN} --session #{USER_BROWSER_SESSION} close",
+            hard_timeout: 5
+          )
+        end
+      rescue StandardError
+        # Non-fatal: if detection fails just proceed and let the command fail/retry.
+        nil
+      end
+
+      # Returns PIDs of agent-browser daemon processes for the user-browser session.
+      # agent-browser creates a Unix socket at ~/.agent-browser/<session>.sock for
+      # IPC; we look up which process owns that socket file.
+      private def user_browser_daemon_pids
+        sock = File.expand_path("~/.agent-browser/#{USER_BROWSER_SESSION}.sock")
+        return [] unless File.exist?(sock)
+
+        result = Shell.new.execute(
+          command: "lsof #{Shellwords.escape(sock)} 2>/dev/null",
+          hard_timeout: 3
+        )
+        return [] unless result[:success]
+
+        result[:stdout].to_s.lines.drop(1).filter_map do |line|
+          cols = line.split
+          pid  = cols[1]&.to_i
+          pid && pid > 0 ? pid : nil
+        end.uniq
+      rescue StandardError
+        []
+      end
+
+      # Returns a hash { port: Integer, alive: Boolean } for the given PID's
+      # first local TCP connection to another localhost port, or nil if none found.
+      #
+      # "alive" is true only when the TCP state is ESTABLISHED.
+      # CLOSE_WAIT / CLOSED connections are returned with alive=false —
+      # a daemon in that state would fail on the next command regardless of port.
+      private def daemon_tcp_connection(pid)
+        result = Shell.new.execute(
+          command: "lsof -p #{pid} 2>/dev/null",
+          hard_timeout: 3
+        )
+        return nil unless result[:success]
+
+        result[:stdout].to_s.each_line do |line|
+          # Match: "TCP localhost:LOCAL->localhost:REMOTE (STATE)"
+          next unless line.include?("TCP") && line.include?("->")
+
+          # Extract destination port and state
+          # Format: "...TCP localhost:LOCAL->localhost:PORT (STATE)"
+          if (m = line.match(/->localhost:(\d+)(?:\s+\((\w+(?:_\w+)*)\))?/))
+            port  = m[1].to_i
+            state = m[2]&.upcase  # "ESTABLISHED", "CLOSE_WAIT", "CLOSED", etc.
+            alive = state == "ESTABLISHED"
+            return { port: port, alive: alive }
+          end
+        end
+        nil
+      rescue StandardError
+        nil
+      end
+
       private def build_command(command, cdp_ws_url: nil, session_name: nil, headed: true)
         parts = [AGENT_BROWSER_BIN]
         if cdp_ws_url
           # Connect to user's real browser via CDP WebSocket URL.
           # Using the full ws:// URL bypasses Chrome 144+'s HTTP 404 on /json/version.
+          # The dedicated --session isolates this daemon from the sandbox daemon so
+          # the --cdp flag is honoured on every invocation, not just the first one.
+          parts += ["--session", USER_BROWSER_SESSION]
           parts += ["--cdp", cdp_ws_url]
         else
           parts << "--headed" if headed
