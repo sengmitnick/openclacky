@@ -266,6 +266,96 @@ RSpec.describe Clacky::Tools::Browser do
   end
 
   # ---------------------------------------------------------------------------
+  # find_node_binary / chrome_mcp_available?
+  # ---------------------------------------------------------------------------
+  describe "#find_node_binary" do
+    it "returns a string path or nil" do
+      result = tool.send(:find_node_binary)
+      expect(result).to satisfy { |r| r.nil? || (r.is_a?(String) && !r.empty?) }
+    end
+
+    it "returns a path to an executable file when found" do
+      result = tool.send(:find_node_binary)
+      if result
+        expect(File.executable?(result)).to be true
+      end
+    end
+  end
+
+  describe "#chrome_mcp_available?" do
+    it "returns a boolean" do
+      expect([true, false]).to include(tool.send(:chrome_mcp_available?))
+    end
+  end
+
+  describe "#build_mcp_command" do
+    it "returns an array starting with env hash and npx command" do
+      allow(tool).to receive(:find_node_binary).and_return("/usr/local/bin/node")
+      cmd = tool.send(:build_mcp_command)
+      expect(cmd).to be_an(Array)
+      expect(cmd.first).to be_a(Hash)        # env hash
+      expect(cmd.first["NODE"]).to eq("/usr/local/bin/node")
+      expect(cmd[1]).to be_a(String)          # npx path
+    end
+
+    it "includes --userDataDir when user_data_dir is provided" do
+      allow(tool).to receive(:find_node_binary).and_return("/usr/local/bin/node")
+      cmd = tool.send(:build_mcp_command, user_data_dir: "/tmp/profile")
+      expect(cmd).to include("--userDataDir", "/tmp/profile")
+    end
+
+    it "excludes --userDataDir when user_data_dir is nil" do
+      allow(tool).to receive(:find_node_binary).and_return("/usr/local/bin/node")
+      cmd = tool.send(:build_mcp_command)
+      expect(cmd).not_to include("--userDataDir")
+    end
+  end
+
+  describe "#mcp_json_rpc" do
+    it "builds a valid JSON-RPC 2.0 message" do
+      msg = tool.send(:mcp_json_rpc, "tools/call", { name: "list_pages" }, id: 42)
+      parsed = JSON.parse(msg)
+      expect(parsed["jsonrpc"]).to eq("2.0")
+      expect(parsed["id"]).to eq(42)
+      expect(parsed["method"]).to eq("tools/call")
+      expect(parsed["params"]["name"]).to eq("list_pages")
+    end
+  end
+
+  describe "#mcp_read_response" do
+    it "reads matching JSON response from a mock IO" do
+      json_line = JSON.generate({ "jsonrpc" => "2.0", "id" => 2, "result" => { "ok" => true } })
+      io = StringIO.new(json_line + "\n")
+      result = tool.send(:mcp_read_response, io, target_id: 2, timeout: 2)
+      expect(result).to be_a(Hash)
+      expect(result["id"]).to eq(2)
+      expect(result["result"]["ok"]).to be true
+    end
+
+    it "skips non-matching ids" do
+      line1 = JSON.generate({ "jsonrpc" => "2.0", "id" => 1, "result" => {} })
+      line2 = JSON.generate({ "jsonrpc" => "2.0", "id" => 2, "result" => { "found" => true } })
+      io = StringIO.new("#{line1}\n#{line2}\n")
+      result = tool.send(:mcp_read_response, io, target_id: 2, timeout: 2)
+      expect(result["result"]["found"]).to be true
+    end
+
+    it "returns nil when no matching message and IO closes" do
+      io = StringIO.new("")
+      result = tool.send(:mcp_read_response, io, target_id: 99, timeout: 1)
+      expect(result).to be_nil
+    end
+
+    it "returns nil on timeout" do
+      read_io, write_io = IO.pipe
+      write_io.close  # Nothing to read → EOF immediately
+      result = tool.send(:mcp_read_response, read_io, target_id: 99, timeout: 1)
+      expect(result).to be_nil
+      read_io.close
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Tool metadata
   # ---------------------------------------------------------------------------
   describe "tool metadata" do

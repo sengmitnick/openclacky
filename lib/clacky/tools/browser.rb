@@ -2,6 +2,7 @@
 
 require "json"
 require "open3"
+require "timeout"
 require "tmpdir"
 require "shellwords"
 require_relative "base"
@@ -129,9 +130,9 @@ module Clacky
         required: ["action"]
       }
 
-      # Chrome MCP command constants
-      CHROME_MCP_COMMAND = "npx"
-      CHROME_MCP_ARGS = %w[
+      # Chrome MCP npm package
+      CHROME_MCP_PACKAGE = "chrome-devtools-mcp@latest"
+      CHROME_MCP_BASE_ARGS = %w[
         -y
         chrome-devtools-mcp@latest
         --autoConnect
@@ -142,8 +143,12 @@ module Clacky
       # Minimum Chrome major version for Chrome MCP support
       MIN_CHROME_MAJOR = 146
 
-      # MCP tool call timeout (seconds)
-      MCP_TIMEOUT = 30
+      # MCP handshake/call timeout (seconds)
+      MCP_HANDSHAKE_TIMEOUT = 12
+      MCP_CALL_TIMEOUT      = 30
+
+      # Minimum Node.js major version required by chrome-devtools-mcp
+      MIN_NODE_MAJOR = 20
 
       MAX_SNAPSHOT_CHARS   = 4000
       MAX_LLM_OUTPUT_CHARS = 6000
@@ -386,70 +391,159 @@ module Clacky
       # Chrome MCP — process management & JSON-RPC over stdio
       # -----------------------------------------------------------------------
 
-      # Returns true if npx is available on PATH
-      private def chrome_mcp_available?
-        result = system("which npx > /dev/null 2>&1")
-        result
+      # Returns the path to a Node.js binary that meets MIN_NODE_MAJOR.
+      # Searches nvm-managed versions first (newest first), then falls back
+      # to the system `node`.  Returns nil if no suitable node is found.
+      private def find_node_binary
+        # Check nvm-managed versions (newest LTS first)
+        nvm_base = File.expand_path("~/.nvm/versions/node")
+        if Dir.exist?(nvm_base)
+          candidates = Dir.glob(File.join(nvm_base, "v*/bin/node")).sort.reverse
+          candidates.each do |path|
+            version_str = path.split("/").reverse[2] # e.g. "v22.22.0"
+            major = version_str.gsub(/^v/, "").split(".").first.to_i
+            return path if major >= MIN_NODE_MAJOR
+          end
+        end
+
+        # Fall back to system node
+        sys_node = `which node 2>/dev/null`.strip
+        return nil if sys_node.empty? || !File.executable?(sys_node)
+
+        version_line = `#{sys_node} --version 2>/dev/null`.strip # "v22.1.0"
+        major = version_line.gsub(/^v/, "").split(".").first.to_i
+        major >= MIN_NODE_MAJOR ? sys_node : nil
       end
 
-      # Calls a Chrome MCP tool and returns the parsed response.
-      # Spawns a short-lived npx process each time (stateless mode).
-      private def mcp_call(tool_name, arguments = {})
-        cmd_args = CHROME_MCP_ARGS.dup
+      # Returns true if a suitable Node.js + npx are available for Chrome MCP.
+      private def chrome_mcp_available?
+        !!find_node_binary
+      end
 
-        # Build MCP JSON-RPC messages
-        init_msg  = mcp_json_rpc("initialize", {
+      # Build the [env, npx_path, *args] command array for chrome-devtools-mcp.
+      # If user_data_dir is provided, appends --userDataDir.
+      private def build_mcp_command(user_data_dir: nil)
+        node_bin  = find_node_binary
+        node_dir  = File.dirname(node_bin)
+        npx_path  = File.join(node_dir, "npx")
+        npx_path  = "npx" unless File.executable?(npx_path)
+
+        # Prepend the node bin dir so npx resolves the correct node executable
+        env = {
+          "PATH"  => "#{node_dir}:#{ENV.fetch('PATH', '')}",
+          "NODE"  => node_bin
+        }
+
+        args = CHROME_MCP_BASE_ARGS.dup
+        if user_data_dir && !user_data_dir.to_s.empty?
+          args += ["--userDataDir", user_data_dir.to_s]
+        end
+
+        [env, npx_path, *args]
+      end
+
+      # Calls a Chrome MCP tool using the correct MCP stdio JSON-RPC protocol.
+      #
+      # Protocol sequence (per MCP spec):
+      #   1. client  → initialize
+      #   2. server  → initialize result
+      #   3. client  → notifications/initialized (notification, no id)
+      #   4. client  → tools/call
+      #   5. server  → tools/call result
+      #
+      # Uses Open3.popen3 for bidirectional stdio communication.
+      # Each call spawns a short-lived MCP process (stateless per-call).
+      private def mcp_call(tool_name, arguments = {}, user_data_dir: nil)
+        cmd = build_mcp_command(user_data_dir: user_data_dir)
+
+        init_msg   = mcp_json_rpc("initialize", {
           protocolVersion: "2024-11-05",
           capabilities:    {},
           clientInfo:      { name: "clacky", version: "1.0" }
         }, id: 1)
+
+        notify_msg = JSON.generate({
+          jsonrpc: "2.0",
+          method:  "notifications/initialized",
+          params:  {}
+        })
 
         call_msg = mcp_json_rpc("tools/call", {
           name:      tool_name,
           arguments: arguments
         }, id: 2)
 
-        # Combine as newline-delimited JSON (MCP stdio framing)
-        input = [init_msg, call_msg].join("\n") + "\n"
+        Open3.popen3(*cmd) do |stdin, stdout, stderr_io, wait_thr|
+          # --- Step 1: send initialize ---
+          stdin.write(init_msg + "\n")
+          stdin.flush
 
-        stdout_str, stderr_str, status = Open3.capture3(
-          CHROME_MCP_COMMAND, *cmd_args,
-          stdin_data: input,
-          timeout:    MCP_TIMEOUT
-        )
+          init_resp = mcp_read_response(stdout, target_id: 1, timeout: MCP_HANDSHAKE_TIMEOUT)
+          unless init_resp
+            Process.kill("TERM", wait_thr.pid) rescue nil
+            raise "Chrome MCP initialize handshake timed out"
+          end
 
-        unless status.success? || !stdout_str.empty?
-          raise "Chrome MCP process failed (exit #{status.exitstatus}): #{stderr_str.to_s[0..200]}"
+          # --- Step 2: send initialized notification ---
+          stdin.write(notify_msg + "\n")
+          stdin.flush
+
+          # --- Step 3: send tool call ---
+          stdin.write(call_msg + "\n")
+          stdin.flush
+
+          call_resp = mcp_read_response(stdout, target_id: 2, timeout: MCP_CALL_TIMEOUT)
+
+          Process.kill("TERM", wait_thr.pid) rescue nil
+
+          unless call_resp
+            raise "Chrome MCP tools/call '#{tool_name}' timed out after #{MCP_CALL_TIMEOUT}s"
+          end
+
+          # Propagate JSON-RPC protocol errors as Ruby exceptions
+          if call_resp["error"]
+            err = call_resp["error"]
+            raise "Chrome MCP error: #{err.is_a?(Hash) ? err['message'] : err}"
+          end
+
+          result = call_resp["result"] || {}
+
+          # Propagate tool-level errors (isError: true means the MCP tool itself failed,
+          # e.g. Chrome not running, page not found, etc.)
+          if result["isError"]
+            text = extract_text_content(result)
+            raise text.empty? ? "Chrome MCP tool '#{tool_name}' failed" : text
+          end
+
+          result
         end
-
-        parse_mcp_response(stdout_str, request_id: 2)
       end
 
-      # Build a JSON-RPC 2.0 message string
+      # Build a JSON-RPC 2.0 request message string (with id)
       private def mcp_json_rpc(method, params, id:)
         JSON.generate({ jsonrpc: "2.0", id: id, method: method, params: params })
       end
 
-      # Parse MCP stdio output — find the response for our call (id=2)
-      private def parse_mcp_response(raw_output, request_id:)
-        # MCP sends newline-delimited JSON frames
-        raw_output.each_line do |line|
-          line = line.strip
-          next if line.empty?
-          begin
-            msg = JSON.parse(line)
-            next unless msg.is_a?(Hash)
-            next unless msg["id"] == request_id
-            if msg["error"]
-              raise "Chrome MCP error: #{msg['error']['message'] || msg['error']}"
+      # Read newline-delimited JSON from stdout until a message with the given
+      # id is found, or timeout expires.  Returns the parsed Hash or nil.
+      private def mcp_read_response(io, target_id:, timeout: 10)
+        Timeout.timeout(timeout) do
+          loop do
+            line = io.gets
+            break if line.nil?
+            line = line.strip
+            next if line.empty?
+            begin
+              msg = JSON.parse(line)
+              return msg if msg.is_a?(Hash) && msg["id"] == target_id
+            rescue JSON::ParserError
+              next
             end
-            return msg["result"] || {}
-          rescue JSON::ParserError
-            next
           end
+          nil
         end
-        # Return empty result if no matching response found
-        {}
+      rescue Timeout::Error
+        nil
       end
 
       # -----------------------------------------------------------------------
