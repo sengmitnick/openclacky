@@ -6,24 +6,25 @@ require "clacky/tools/browser"
 RSpec.describe Clacky::Tools::Browser do
   let(:tool) { described_class.new }
 
+  # ---------------------------------------------------------------------------
+  # compress_snapshot
+  # ---------------------------------------------------------------------------
   describe "#compress_snapshot" do
-    let(:snapshot_output) do
+    let(:snapshot_with_noise) do
       <<~SNAP
         - document:
-          - heading "Example" [ref=e1] [level=1]
+          - heading "Example" [ref=e1]
           - link "Learn more" [ref=e2]:
-            - /url: https://example.com/very/long/path?with=many&query=params&that=bloat&the=output
+            - /url: https://example.com/path
           - textbox "Email" [ref=e3]:
             - /placeholder: you@example.com
           - img
-          - img "Logo with alt text"
+          - img "Logo"
           - button "Submit" [ref=e4]
-          - link "Home" [ref=e5]:
-            - /url: /
       SNAP
     end
 
-    subject(:compressed) { tool.send(:compress_snapshot, snapshot_output) }
+    subject(:compressed) { tool.send(:compress_snapshot, snapshot_with_noise) }
 
     it "removes /url: lines" do
       expect(compressed).not_to include("/url:")
@@ -33,41 +34,25 @@ RSpec.describe Clacky::Tools::Browser do
       expect(compressed).not_to include("/placeholder:")
     end
 
-    it "removes bare img lines with no alt text" do
-      lines = compressed.lines.map(&:strip)
-      expect(lines).not_to include("- img")
+    it "removes bare img lines" do
+      expect(compressed.lines.map(&:strip)).not_to include("- img")
     end
 
-    it "keeps img lines that have alt text" do
-      expect(compressed).to include("img \"Logo with alt text\"")
+    it "keeps img lines with alt text" do
+      expect(compressed).to include('img "Logo"')
     end
 
-    it "keeps all [ref=eN] anchors" do
-      %w[e1 e2 e3 e4 e5].each do |ref|
-        expect(compressed).to include("[ref=#{ref}]")
-      end
+    it "keeps ref anchors" do
+      %w[e1 e2 e3 e4].each { |r| expect(compressed).to include("[ref=#{r}]") }
     end
 
-    it "keeps interactive elements" do
-      expect(compressed).to include("button \"Submit\"")
-      expect(compressed).to include("textbox \"Email\"")
-      expect(compressed).to include("heading \"Example\"")
-    end
-
-    it "appends a compression note when lines were removed" do
+    it "appends compression note" do
       expect(compressed).to include("[snapshot compressed:")
     end
 
-    it "is smaller than the original" do
-      expect(compressed.length).to be < snapshot_output.length
-    end
-
-    it "returns output unchanged when there is nothing to remove" do
-      plain = "- document:\n  - heading \"Title\" [ref=e1] [level=1]\n  - button \"Go\" [ref=e2]\n"
-      result = tool.send(:compress_snapshot, plain)
-      # No compression note added when nothing removed
-      expect(result).not_to include("[snapshot compressed:")
-      expect(result).to eq(plain)
+    it "returns unchanged output when nothing to remove" do
+      plain = "- button \"Go\" [ref=e1]\n"
+      expect(tool.send(:compress_snapshot, plain)).to eq(plain)
     end
 
     it "handles empty input" do
@@ -75,55 +60,227 @@ RSpec.describe Clacky::Tools::Browser do
     end
   end
 
-  describe "#format_result_for_llm" do
-    context "when command is snapshot" do
-      let(:big_snapshot) do
-        # Build a snapshot with many /url: lines to exceed MAX_SNAPSHOT_CHARS
-        lines = ["- document:\n"]
-        50.times do |i|
-          lines << "  - link \"Link #{i}\" [ref=e#{i}]:\n"
-          lines << "    - /url: https://example.com/very/long/path/#{i}?utm_source=test&utm_medium=email\n"
-        end
-        lines.join
+  # ---------------------------------------------------------------------------
+  # build_ai_snapshot
+  # ---------------------------------------------------------------------------
+  describe "#build_ai_snapshot" do
+    let(:snapshot_node) do
+      {
+        "id"   => "root",
+        "role" => "document",
+        "name" => "Example",
+        "children" => [
+          { "id" => "btn-1", "role" => "button",  "name" => "Continue" },
+          { "id" => "txt-1", "role" => "textbox", "name" => "Email",
+            "value" => "user@example.com" }
+        ]
+      }
+    end
+
+    subject(:output) { tool.send(:build_ai_snapshot, snapshot_node) }
+
+    it "renders button ref" do
+      expect(output).to include('- button "Continue" [ref=btn-1]')
+    end
+
+    it "renders textbox ref with value" do
+      expect(output).to include('- textbox "Email" [ref=txt-1] value="user@example.com"')
+    end
+
+    it "renders the root document role" do
+      expect(output).to include("- document")
+    end
+
+    context "with interactive: true" do
+      subject(:output) { tool.send(:build_ai_snapshot, snapshot_node, interactive: true) }
+
+      it "includes button" do
+        expect(output).to include("button")
       end
 
-      let(:result) do
-        {
-          action: "snapshot",
-          success: true,
-          exit_code: 0,
-          stdout: big_snapshot,
-          stderr: ""
-        }
+      it "includes textbox" do
+        expect(output).to include("textbox")
       end
 
-      it "compresses snapshot output (removes /url: lines)" do
-        formatted = tool.format_result_for_llm(result)
-        expect(formatted[:stdout]).not_to include("/url:")
-      end
-
-      it "uses MAX_SNAPSHOT_CHARS limit (smaller than MAX_LLM_OUTPUT_CHARS)" do
-        # The result stdout should be limited to ~MAX_SNAPSHOT_CHARS, not 6000
-        formatted = tool.format_result_for_llm(result)
-        expect(formatted[:stdout].length).to be <= described_class::MAX_SNAPSHOT_CHARS + 300
+      it "excludes non-interactive document role" do
+        expect(output).not_to include("- document")
       end
     end
 
-    context "when action is not snapshot" do
-      let(:result) do
-        {
-          action: "open",
-          success: true,
-          exit_code: 0,
-          stdout: "Page loaded\n",
-          stderr: ""
-        }
-      end
+    context "with max_depth: 0" do
+      subject(:output) { tool.send(:build_ai_snapshot, snapshot_node, max_depth: 0) }
 
-      it "does not compress output" do
-        formatted = tool.format_result_for_llm(result)
-        expect(formatted[:stdout]).to eq("Page loaded\n")
+      it "only shows the root node" do
+        expect(output).to include("- document")
+        expect(output).not_to include("button")
       end
+    end
+
+    it "handles nil/empty node gracefully" do
+      expect(tool.send(:build_ai_snapshot, nil)).to eq("")
+      expect(tool.send(:build_ai_snapshot, {})).to eq("")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # MCP response extractors
+  # ---------------------------------------------------------------------------
+  describe "#extract_pages" do
+    it "extracts pages from structuredContent" do
+      result = {
+        "structuredContent" => {
+          "pages" => [
+            { "id" => 1, "url" => "https://example.com", "selected" => true },
+            { "id" => 2, "url" => "https://other.com",   "selected" => false }
+          ]
+        }
+      }
+      pages = tool.send(:extract_pages, result)
+      expect(pages.size).to eq(2)
+      expect(pages.first[:id]).to eq(1)
+      expect(pages.first[:url]).to eq("https://example.com")
+      expect(pages.first[:selected]).to be true
+    end
+
+    it "falls back to text content parsing" do
+      result = {
+        "content" => [
+          { "type" => "text", "text" => "1: https://example.com [selected]\n2: https://other.com" }
+        ]
+      }
+      pages = tool.send(:extract_pages, result)
+      expect(pages.size).to eq(2)
+      expect(pages.first[:url]).to eq("https://example.com")
+      expect(pages.first[:selected]).to be true
+    end
+
+    it "returns empty array for nil/empty" do
+      expect(tool.send(:extract_pages, nil)).to eq([])
+      expect(tool.send(:extract_pages, {})).to eq([])
+    end
+  end
+
+  describe "#extract_snapshot" do
+    it "extracts snapshot from structuredContent" do
+      node = { "id" => "root", "role" => "document" }
+      result = { "structuredContent" => { "snapshot" => node } }
+      expect(tool.send(:extract_snapshot, result)).to eq(node)
+    end
+
+    it "returns empty hash for missing snapshot" do
+      expect(tool.send(:extract_snapshot, {})).to eq({})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # format_result_for_llm
+  # ---------------------------------------------------------------------------
+  describe "#format_result_for_llm" do
+    it "returns error result unchanged" do
+      result = { error: "something went wrong" }
+      expect(tool.format_result_for_llm(result)).to eq(result)
+    end
+
+    it "compresses snapshot output" do
+      output = "- link \"X\" [ref=e1]:\n  - /url: https://example.com\n"
+      result = { action: "snapshot", success: true, output: output, profile: "user" }
+      formatted = tool.format_result_for_llm(result)
+      expect(formatted[:stdout]).not_to include("/url:")
+    end
+
+    it "does not compress non-snapshot output" do
+      result = { action: "open", success: true, output: "Opened: https://x.com", profile: "user" }
+      formatted = tool.format_result_for_llm(result)
+      expect(formatted[:stdout]).to eq("Opened: https://x.com")
+    end
+
+    it "includes action and success fields" do
+      result = { action: "tabs", success: true, output: "1: https://x.com", profile: "user" }
+      formatted = tool.format_result_for_llm(result)
+      expect(formatted[:action]).to eq("tabs")
+      expect(formatted[:success]).to be true
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # format_tabs
+  # ---------------------------------------------------------------------------
+  describe "#format_tabs" do
+    it "formats tab list" do
+      pages = [
+        { id: 1, url: "https://example.com", selected: true },
+        { id: 2, url: "https://other.com",   selected: false }
+      ]
+      output = tool.send(:format_tabs, pages)
+      expect(output).to include("1: https://example.com [selected]")
+      expect(output).to include("2: https://other.com")
+    end
+
+    it "returns message for empty tabs" do
+      expect(tool.send(:format_tabs, [])).to eq("No open tabs.")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # parameter helpers
+  # ---------------------------------------------------------------------------
+  describe "#require_url" do
+    it "returns url when present" do
+      expect(tool.send(:require_url, { url: "https://example.com" })).to eq("https://example.com")
+    end
+
+    it "returns error hash when missing" do
+      result = tool.send(:require_url, {})
+      expect(result).to be_a(Hash)
+      expect(result[:error]).to match(/url is required/)
+    end
+  end
+
+  describe "#require_ref" do
+    it "returns ref string when present" do
+      expect(tool.send(:require_ref, "btn-1")).to eq("btn-1")
+    end
+
+    it "returns error hash when nil" do
+      result = tool.send(:require_ref, nil)
+      expect(result).to be_a(Hash)
+      expect(result[:error]).to match(/ref is required/)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # truncate_output
+  # ---------------------------------------------------------------------------
+  describe "#truncate_output" do
+    it "returns output unchanged when within limit" do
+      out = "hello world"
+      expect(tool.send(:truncate_output, out, 100)).to eq(out)
+    end
+
+    it "truncates long output with notice" do
+      long_output = ("x" * 50 + "\n") * 100
+      truncated = tool.send(:truncate_output, long_output, 200)
+      expect(truncated.length).to be < long_output.length
+      expect(truncated).to include("truncated")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Tool metadata
+  # ---------------------------------------------------------------------------
+  describe "tool metadata" do
+    it "has correct tool_name" do
+      expect(described_class.tool_name).to eq("browser")
+    end
+
+    it "has required action parameter" do
+      required = described_class.tool_parameters[:required]
+      expect(required).to include("action")
+    end
+
+    it "supports user and sandbox profiles" do
+      profile_enum = described_class.tool_parameters.dig(:properties, :profile, :enum)
+      expect(profile_enum).to include("user", "sandbox")
     end
   end
 end
