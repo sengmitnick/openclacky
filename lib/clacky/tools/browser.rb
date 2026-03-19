@@ -1,320 +1,60 @@
 # frozen_string_literal: true
 
-require "shellwords"
-require "yaml"
-require "tmpdir"
 require "json"
 require "open3"
-require "socket"
-require "net/http"
+require "timeout"
+require "tmpdir"
+require "shellwords"
 require_relative "base"
-require_relative "shell"
 
 module Clacky
   module Tools
-    # Detects the user's default Chromium-based browser and resolves its
-    # userDataDir so we can read DevToolsActivePort and connect to the
-    # running browser directly — identical to how openclaw does it.
-    module ChromiumDetector
-      # Minimum Chromium major version that supports the attach consent dialog
-      # (the "Allow remote debugging?" popup that lets us connect without
-      # pre-launching Chrome with --remote-debugging-port).
-      MIN_CHROMIUM_MAJOR = 144
-
-      # macOS Launch Services plist — records which app handles http/https
-      MAC_LS_PLIST = File.expand_path(
-        "~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
-      )
-
-      # Known Chromium-based bundle IDs on macOS, in rough priority order.
-      # Note: Edge on macOS uses "com.microsoft.edgemac" (not "com.microsoft.Edge").
-      MAC_CHROMIUM_BUNDLE_IDS = {
-        "com.google.Chrome"                  => :chrome,
-        "com.google.Chrome.beta"             => :chrome,
-        "com.google.Chrome.canary"           => :chrome,
-        "com.google.Chrome.dev"              => :chrome,
-        "com.microsoft.edgemac"              => :edge,   # real macOS bundle ID
-        "com.microsoft.edgemac.Beta"         => :edge,
-        "com.microsoft.edgemac.Dev"          => :edge,
-        "com.microsoft.edgemac.Canary"       => :edge,
-        "com.microsoft.Edge"                 => :edge,   # kept for compatibility
-        "com.microsoft.EdgeBeta"             => :edge,
-        "com.microsoft.EdgeDev"              => :edge,
-        "com.microsoft.EdgeCanary"           => :edge,
-        "com.brave.Browser"                  => :brave,
-        "com.brave.Browser.beta"             => :brave,
-        "com.brave.Browser.nightly"          => :brave,
-        "org.chromium.Chromium"              => :chromium,
-        "com.vivaldi.Vivaldi"                => :chromium,
-        "com.operasoftware.Opera"            => :chromium,
-        "com.operasoftware.OperaGX"          => :chromium,
-        "com.yandex.desktop.yandex-browser"  => :chromium,
-        "company.thebrowser.Browser"         => :chromium, # Arc
-      }.freeze
-
-      # macOS userDataDir per browser kind.
-      # Edge stores data under "Microsoft Edge", not "msedge".
-      MAC_USER_DATA_DIRS = {
-        chrome:   "~/Library/Application Support/Google/Chrome",
-        edge:     "~/Library/Application Support/Microsoft Edge",
-        brave:    "~/Library/Application Support/BraveSoftware/Brave-Browser",
-        chromium: "~/Library/Application Support/Chromium",
-      }.freeze
-
-      # Fallback app paths to search when default browser is not Chromium
-      MAC_FALLBACK_BROWSERS = [
-        { kind: :chrome,   path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
-        { kind: :chrome,   path: "~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
-        { kind: :edge,     path: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" },
-        { kind: :edge,     path: "~/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" },
-        { kind: :brave,    path: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" },
-        { kind: :brave,    path: "~/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" },
-        { kind: :chromium, path: "/Applications/Chromium.app/Contents/MacOS/Chromium" },
-        { kind: :chromium, path: "~/Applications/Chromium.app/Contents/MacOS/Chromium" },
-      ].freeze
-
-      # Linux .desktop IDs that belong to Chromium-based browsers
-      LINUX_CHROMIUM_DESKTOP_IDS = %w[
-        google-chrome.desktop
-        google-chrome-beta.desktop
-        google-chrome-unstable.desktop
-        brave-browser.desktop
-        microsoft-edge.desktop
-        microsoft-edge-beta.desktop
-        microsoft-edge-dev.desktop
-        chromium.desktop
-        chromium-browser.desktop
-        vivaldi.desktop
-        vivaldi-stable.desktop
-        opera.desktop
-        org.chromium.Chromium.desktop
-      ].freeze
-
-      # Linux userDataDir per desktop-id kind
-      LINUX_USER_DATA_DIRS = {
-        chrome:   "~/.config/google-chrome",
-        edge:     "~/.config/microsoft-edge",
-        brave:    "~/.config/BraveSoftware/Brave-Browser",
-        chromium: "~/.config/chromium",
-      }.freeze
-
-      # Windows AppData paths (resolved at runtime via ENV)
-      # Returns {kind: Symbol, user_data_dir: String} or nil
-      def self.detect
-        case RUBY_PLATFORM
-        when /darwin/
-          detect_mac
-        when /linux/
-          detect_linux
-        when /mswin|mingw|cygwin/
-          detect_windows
-        end
-      end
-
-      # --- macOS ---
-
-      def self.detect_mac
-        bundle_id = mac_default_browser_bundle_id
-        kind = bundle_id && MAC_CHROMIUM_BUNDLE_IDS[bundle_id]
-
-        if kind
-          user_data_dir = File.expand_path(MAC_USER_DATA_DIRS[kind])
-          # No version check here — Stage 2/3 (DevToolsActivePort) validates connectivity.
-          # Version check via osascript is too slow (1-2 s) for the hot path.
-          return { kind: kind, user_data_dir: user_data_dir, default_is_chromium: true }
-        end
-
-        # Default browser is not Chromium — search installed fallback browsers.
-        fallback = mac_fallback_chromium
-        fallback&.merge(default_is_chromium: false)
-      end
-
-      private_class_method def self.mac_default_browser_bundle_id
-        return nil unless File.exist?(MAC_LS_PLIST)
-
-        raw = run_cmd("/usr/bin/plutil",
-                      "-extract", "LSHandlers", "json", "-o", "-", "--", MAC_LS_PLIST)
-        return nil unless raw
-
-        handlers = JSON.parse(raw) rescue nil
-        return nil unless handlers.is_a?(Array)
-
-        %w[http https].each do |scheme|
-          handlers.each do |entry|
-            next unless entry.is_a?(Hash) && entry["LSHandlerURLScheme"] == scheme
-            id = entry["LSHandlerRoleAll"] || entry["LSHandlerRoleViewer"]
-            return id if id
-          end
-        end
-        nil
-      end
-
-      private_class_method def self.mac_browser_version_for_bundle(bundle_id)
-        app_path_raw = run_cmd("/usr/bin/osascript",
-                               "-e", %(POSIX path of (path to application id "#{bundle_id}")))
-        return nil unless app_path_raw
-
-        app_path = app_path_raw.strip.chomp("/")
-        exe_name = run_cmd("/usr/bin/defaults",
-                           "read", "#{app_path}/Contents/Info", "CFBundleShortVersionString")
-        return nil unless exe_name
-
-        exe_name.strip
-      end
-
-      private_class_method def self.mac_fallback_chromium
-        MAC_FALLBACK_BROWSERS.each do |entry|
-          path = File.expand_path(entry[:path])
-          next unless File.executable?(path)
-
-          user_data_dir = File.expand_path(MAC_USER_DATA_DIRS[entry[:kind]])
-          return { kind: entry[:kind], user_data_dir: user_data_dir }
-        end
-        nil
-      end
-
-      # --- Linux ---
-
-      def self.detect_linux
-        desktop_id = linux_default_desktop_id
-        kind = linux_kind_from_desktop_id(desktop_id)
-
-        if kind
-          user_data_dir = File.expand_path(LINUX_USER_DATA_DIRS[kind])
-          return { kind: kind, user_data_dir: user_data_dir, default_is_chromium: true }
-        end
-
-        fallback = linux_fallback_chromium
-        fallback&.merge(default_is_chromium: false)
-      end
-
-      private_class_method def self.linux_default_desktop_id
-        id = run_cmd("xdg-settings", "get", "default-web-browser") ||
-             run_cmd("xdg-mime", "query", "default", "x-scheme-handler/http")
-        id&.strip
-      end
-
-      private_class_method def self.linux_kind_from_desktop_id(desktop_id)
-        return nil unless desktop_id && LINUX_CHROMIUM_DESKTOP_IDS.include?(desktop_id)
-
-        case desktop_id
-        when /brave/    then :brave
-        when /edge/     then :edge
-        when /chromium/ then :chromium
-        else                 :chrome
-        end
-      end
-
-      private_class_method def self.linux_fallback_chromium
-        candidates = [
-          { kind: :chrome,   path: "/usr/bin/google-chrome" },
-          { kind: :chrome,   path: "/usr/bin/google-chrome-stable" },
-          { kind: :brave,    path: "/usr/bin/brave-browser" },
-          { kind: :edge,     path: "/usr/bin/microsoft-edge" },
-          { kind: :chromium, path: "/usr/bin/chromium" },
-          { kind: :chromium, path: "/usr/bin/chromium-browser" },
-          { kind: :chromium, path: "/snap/bin/chromium" },
-        ]
-        candidates.each do |entry|
-          next unless File.executable?(entry[:path])
-          user_data_dir = File.expand_path(LINUX_USER_DATA_DIRS[entry[:kind]])
-          return { kind: entry[:kind], user_data_dir: user_data_dir }
-        end
-        nil
-      end
-
-      # --- Windows ---
-
-      def self.detect_windows
-        local_app_data = ENV["LOCALAPPDATA"] || ""
-        return nil if local_app_data.empty?
-
-        # On Windows we only scan for known Chromium-based browsers.
-        # All successfully detected browsers count as default_is_chromium: true
-        # because we have no reliable way to detect the OS default browser here.
-        candidates = [
-          { kind: :chrome,   dir: File.join(local_app_data, "Google", "Chrome", "User Data") },
-          { kind: :edge,     dir: File.join(local_app_data, "Microsoft", "Edge", "User Data") },
-          { kind: :brave,    dir: File.join(local_app_data, "BraveSoftware", "Brave-Browser", "User Data") },
-          { kind: :chromium, dir: File.join(local_app_data, "Chromium", "User Data") },
-        ]
-        candidates.each do |entry|
-          # Check if the UserData dir exists (browser installed and has been used)
-          next unless File.directory?(entry[:dir])
-          return { kind: entry[:kind], user_data_dir: entry[:dir], default_is_chromium: true }
-        end
-        nil
-      end
-
-      # --- Helpers ---
-
-      private_class_method def self.chromium_version_ok?(version_str)
-        return true if version_str.nil? # unknown version — optimistically allow
-        major = version_str.to_s.match(/(\d+)/)&.[](1).to_i
-        major == 0 || major >= MIN_CHROMIUM_MAJOR
-      end
-
-      private_class_method def self.run_cmd(*args)
-        out, _err, status = Open3.capture3(*args.map(&:to_s))
-        status.success? ? out.strip : nil
-      rescue StandardError
-        nil
-      end
-    end
-
+    # Browser tool — controls the user's real Chromium-based browser (Chrome 146+)
+    # via the Chrome DevTools MCP server (chrome-devtools-mcp).
+    #
+    # Architecture: profile="user" uses the existing-session driver (Chrome MCP).
+    #   npx -y chrome-devtools-mcp@latest --autoConnect --experimentalStructuredContent
+    #       --experimental-page-id-routing [--userDataDir <path>]
+    #
+    # Communication: MCP stdio JSON-RPC 2.0 over a *persistent* (daemon) process.
+    # The MCP server process is started once, kept alive across all tool calls,
+    # and only restarted when the process dies unexpectedly.  This means Chrome
+    # shows the "Allow remote debugging" dialog exactly once per daemon lifetime.
+    #
+    # No agent-browser, no DevToolsActivePort, no CDP port management.
     class Browser < Base
       self.tool_name = "browser"
       self.tool_description = <<~DESC
         Control the browser for automation tasks (login, form submission, UI interaction, scraping).
         For simple page fetch or search, prefer web_fetch or web_search instead.
 
-        PROFILES — choose the right browser context:
-        - profile="user"    → your real browser (Chrome/Edge/Brave) with existing logins & cookies. Use when you need to be already logged in. Requires Chromium v144+.
-        - profile="sandbox" → isolated sandboxed browser (default, no cookies). Use for anonymous browsing or when login state doesn't matter.
+        Uses your real Chrome browser (profile="user") with existing logins & cookies. Requires Chrome 146+.
 
         ACTIONS OVERVIEW:
-        - snapshot   → get accessibility tree with element refs (@e1, @e2...). ALWAYS run before interacting.
+        - snapshot   → get accessibility tree with element refs. ALWAYS run before interacting.
         - act        → interact with page: click, type, fill, press, hover, scroll, drag, select, wait, evaluate
-        - open       → navigate to URL (opens new tab in user profile, navigates in sandbox)
+        - open       → open URL in a new tab
         - navigate   → navigate current tab to URL
         - tabs       → list open tabs
         - focus      → switch to a tab by targetId
-        - close      → close current tab (or browser)
-        - screenshot → capture screenshot. NEVER call without user approval first (high token cost).
-        - pdf        → save page as PDF to a file path
-        - upload     → upload a file via file input element
-        - dialog     → respond to alert/confirm/prompt dialogs (accept/dismiss)
-        - console    → read browser console logs (useful for debugging JS errors)
+        - close      → close current tab
+        - screenshot → capture screenshot. Ask user first (high token cost).
         - status     → check if browser is running
-        - start      → start the browser
-        - stop       → stop the browser
 
         SNAPSHOT WORKFLOW — always snapshot first:
         - action="snapshot"                            → full accessibility tree
-        - action="snapshot", interactive=true          → interactive elements only (faster, recommended)
-        - action="snapshot", interactive=true, compact=true → compact interactive (best for most tasks)
-        - action="snapshot", selector="#main"          → scope to a CSS selector
+        - action="snapshot", interactive=true          → interactive elements only (recommended)
+        - action="snapshot", interactive=true, compact=true → compact interactive
 
-        ELEMENT SELECTION in act — prefer in this order:
-        1. Refs from snapshot: ref="@e1"
-        2. Semantic find:      selector='find role button "Submit"' or selector='find label "Email"'
-        3. CSS selector:       selector="#submit-btn"
+        ACT KINDS: click, type, fill, press, hover, drag, select, scroll, wait, evaluate
+        - click:   ref="e1"
+        - fill:    ref="e1", text="value"
+        - press:   key="Enter"
+        - scroll:  direction="down", amount=300
+        - wait:    ms=2000 OR selector=".spinner"
+        - evaluate: js="document.title"
 
-        ACT KINDS: click, type, fill, press, hover, drag, select, scroll, scrollintoview, wait, evaluate, close
-        - click:         ref="@e1" (or selector=)
-        - type/fill:     ref="@e1", text="value"  (fill clears first, type appends)
-        - press:         key="Enter" (or "Control+a", "Tab", etc.)
-        - scroll:        direction="down" (up/down/left/right), amount=300
-        - wait:          ms=2000 (wait N ms) OR selector=".spinner" (wait for element) OR load_state="networkidle"
-        - evaluate:      js="document.title"  → executes JS and returns result
-        - drag:          ref="@e1", target_ref="@e2"
-
-        TARGETING TABS — pass target_id from snapshot/tabs response to subsequent acts:
-        After action="open" or action="tabs", store the returned targetId and pass it to act/snapshot.
-        This ensures you operate on the correct tab even when multiple tabs are open.
-
-        SCREENSHOT — last resort only. Ask user first: "Screenshots cost more tokens. Approve?"
-        When approved: action="screenshot", format="jpeg", quality=50
+        TARGETING TABS — pass target_id from snapshot/tabs to subsequent acts.
       DESC
       self.tool_category = "web"
       self.tool_parameters = {
@@ -322,240 +62,116 @@ module Clacky
         properties: {
           action: {
             type: "string",
-            enum: %w[snapshot act open navigate tabs focus close screenshot pdf upload dialog console status start stop],
+            enum: %w[snapshot act open navigate tabs focus close screenshot status],
             description: "Action to perform."
           },
           profile: {
             type: "string",
-            enum: %w[sandbox user],
-            description: "Browser profile. 'user' = real browser with logins/cookies (Chromium v144+ required). 'sandbox' = isolated (default)."
+            enum: %w[user],
+            description: "Browser profile. Only 'user' is supported — uses your real Chrome browser with existing logins & cookies."
           },
-          # snapshot options
           interactive: {
             type: "boolean",
-            description: "snapshot: only include interactive elements (recommended, reduces noise)."
+            description: "snapshot: only include interactive elements."
           },
           compact: {
             type: "boolean",
-            description: "snapshot: remove empty structural elements for a cleaner tree."
-          },
-          cursor: {
-            type: "boolean",
-            description: "snapshot: include cursor-clickable elements (cursor:pointer, onclick, tabindex)."
+            description: "snapshot: remove empty structural elements."
           },
           depth: {
             type: "integer",
-            description: "snapshot: max tree depth to include."
+            description: "snapshot: max tree depth."
           },
           selector: {
             type: "string",
-            description: "snapshot: scope to a CSS selector. act: CSS/ref selector for the target element."
+            description: "snapshot scope / act CSS selector."
           },
-          # act options
           kind: {
             type: "string",
-            enum: %w[click dblclick type fill press hover drag select scroll scrollintoview wait evaluate close check uncheck],
-            description: "act: the interaction kind."
+            enum: %w[click dblclick type fill press hover drag select scroll wait evaluate],
+            description: "act: interaction kind."
           },
           ref: {
             type: "string",
-            description: "act: element ref from snapshot (e.g. '@e1'). Preferred over selector."
+            description: "act: element ref from snapshot (e.g. 'e1')."
           },
-          text: {
-            type: "string",
-            description: "act type/fill: text to type or fill into the element."
-          },
-          key: {
-            type: "string",
-            description: "act press: key to press (e.g. 'Enter', 'Tab', 'Control+a')."
-          },
+          text: { type: "string", description: "act type/fill: text to enter." },
+          key:  { type: "string", description: "act press: key (e.g. 'Enter')." },
           direction: {
             type: "string",
             enum: %w[up down left right],
-            description: "act scroll: scroll direction."
+            description: "act scroll: direction."
           },
-          amount: {
-            type: "integer",
-            description: "act scroll: pixels to scroll."
-          },
-          ms: {
-            type: "integer",
-            description: "act wait: milliseconds to wait."
-          },
+          amount:     { type: "integer", description: "act scroll: pixels." },
+          ms:         { type: "integer", description: "act wait: milliseconds." },
           load_state: {
             type: "string",
             enum: %w[load domcontentloaded networkidle],
-            description: "act wait: wait for a specific page load state."
+            description: "act wait: page load state."
           },
-          js: {
-            type: "string",
-            description: "act evaluate: JavaScript expression to execute. Returns the result."
-          },
-          target_ref: {
-            type: "string",
-            description: "act drag: destination element ref."
-          },
+          js:         { type: "string", description: "act evaluate: JS expression." },
+          target_ref: { type: "string", description: "act drag: destination ref." },
           values: {
             type: "array",
             items: { type: "string" },
-            description: "act select: option values to select in a <select> element."
+            description: "act select: option values."
           },
-          double_click: {
-            type: "boolean",
-            description: "act click: if true, perform a double-click."
-          },
-          # open / navigate / tabs / focus
-          url: {
-            type: "string",
-            description: "open/navigate: URL to navigate to."
-          },
-          target_id: {
-            type: "string",
-            description: "focus/act/snapshot: target tab ID returned by open or tabs. Pass this to operate on a specific tab."
-          },
-          # screenshot
+          double_click: { type: "boolean", description: "act click: double-click." },
+          url:       { type: "string",  description: "open/navigate: URL." },
+          target_id: { type: "string",  description: "tab targetId from open/tabs." },
           format: {
             type: "string",
             enum: %w[png jpeg],
-            description: "screenshot: image format (default jpeg)."
+            description: "screenshot: format (default jpeg)."
           },
-          quality: {
-            type: "integer",
-            description: "screenshot: JPEG quality 0-100 (default 50)."
-          },
-          full_page: {
-            type: "boolean",
-            description: "screenshot: capture full scrollable page."
-          },
-          # pdf
-          path: {
-            type: "string",
-            description: "pdf: file path to save the PDF."
-          },
-          # upload
-          files: {
-            type: "array",
-            items: { type: "string" },
-            description: "upload: local file paths to upload."
-          },
-          # dialog
-          response: {
-            type: "string",
-            enum: %w[accept dismiss],
-            description: "dialog: accept or dismiss the dialog."
-          },
-          prompt_text: {
-            type: "string",
-            description: "dialog accept: optional text to fill in a prompt dialog."
-          }
+          quality:   { type: "integer", description: "screenshot: JPEG quality 0-100." },
+          full_page: { type: "boolean", description: "screenshot: full scrollable page." }
         },
         required: ["action"]
       }
 
-      AGENT_BROWSER_BIN = "agent-browser"
-      BROWSER_COMMAND_TIMEOUT = 30
-      MIN_AGENT_BROWSER_VERSION = "0.20.0"
+      # Chrome MCP npm package
+      CHROME_MCP_PACKAGE = "chrome-devtools-mcp@latest"
+      CHROME_MCP_BASE_ARGS = %w[
+        -y
+        chrome-devtools-mcp@latest
+        --autoConnect
+        --experimentalStructuredContent
+        --experimental-page-id-routing
+      ].freeze
 
-      # DevToolsActivePort poll settings — Chrome/Edge 144+ writes this file
-      # after the user clicks "Allow" in the attach consent dialog.
-      #
-      # Two wait budgets:
-      #   SHORT — browser just restarted; CDP is already enabled (user-enabled=true)
-      #           and the server starts quickly. 5 s is plenty.
-      #   LONG  — user needs to open edge://inspect and tick the checkbox
-      #           (user-enabled=false). We give them 45 s to find and click it.
-      DEV_TOOLS_PORT_WAIT_SECS_SHORT = 5
-      DEV_TOOLS_PORT_WAIT_SECS_LONG  = 45
-      DEV_TOOLS_PORT_POLL_INTERVAL   = 0.3
+      # Minimum Chrome major version for Chrome MCP support
+      MIN_CHROME_MAJOR = 146
 
-      # Inline config — reads ~/.clacky/browser.yml, falls back to built-in defaults.
-      #
-      # Example ~/.clacky/browser.yml:
-      #   headed: true          # show browser window (default: true)
-      #   session_name: clacky  # persistent session name (default: clacky)
-      class BrowserConfig
-        USER_CONFIG_FILE = File.join(Dir.home, ".clacky", "browser.yml")
+      # MCP handshake/call timeout (seconds)
+      MCP_HANDSHAKE_TIMEOUT = 12
+      MCP_CALL_TIMEOUT      = 30
 
-        DEFAULTS = {
-          "headed"       => true,
-          "session_name" => "clacky"
-        }.freeze
+      # Minimum Node.js major version required by chrome-devtools-mcp
+      MIN_NODE_MAJOR = 20
 
-        attr_reader :headed, :session_name
+      MAX_SNAPSHOT_CHARS   = 4000
+      MAX_LLM_OUTPUT_CHARS = 6000
 
-        def initialize(attrs = {})
-          merged = DEFAULTS.merge(attrs)
-          @headed       = merged["headed"]
-          @session_name = merged["session_name"]
-        end
-
-        def self.load
-          data = File.exist?(USER_CONFIG_FILE) ? YAML.safe_load(File.read(USER_CONFIG_FILE)) || {} : {}
-          new(data)
-        rescue StandardError
-          new
-        end
-      end
+      # ---------------------------------------------------------------------------
+      # Class-level persistent MCP daemon state
+      # ---------------------------------------------------------------------------
+      # @@mcp_process holds the running daemon's IO handles and PID:
+      #   { stdin: IO, stdout: IO, pid: Integer, wait_thr: Thread }
+      # @@mcp_mutex guards all access to avoid race conditions in multi-thread envs.
+      # @@mcp_call_id is an ever-increasing JSON-RPC id counter.
+      @@mcp_process = nil
+      @@mcp_mutex   = Mutex.new
+      @@mcp_call_id = 2  # 1 is reserved for the initialize handshake
 
       def execute(action:, profile: nil, working_dir: nil, **opts)
-        unless agent_browser_ready?
-          return not_ready_response
-        end
-
-        cfg = BrowserConfig.load
-        use_user_profile = profile.to_s == "user"
-
-        # Resolve connection flags depending on profile selection.
-        # user   → try CDP to user's real browser; fall back to sandbox if unreachable.
-        # sandbox (default) → agent-browser's own isolated Chromium session.
-        cdp_port = nil
-        browser_info = nil
-
-        if use_user_profile
-          browser_info = ChromiumDetector.detect
-          cdp_port     = resolve_user_browser_cdp_port(browser_info)
-        end
-
-        # Build the agent-browser subcommand string from the structured action.
-        ab_command = build_action_command(action, opts, real_browser: cdp_port)
-
-        if cdp_port
-          full_command = build_command(ab_command, cdp_port: cdp_port)
-          result = Shell.new.execute(command: full_command,
-                                     hard_timeout: BROWSER_COMMAND_TIMEOUT,
-                                     working_dir: working_dir)
-
-          if result[:success] || !user_browser_connect_error?(result)
-            result[:action]       = action
-            result[:browser_mode] = :user_browser
-            return format_result_hash(result)
-          end
-          # CDP connection lost — fall through to sandbox
-        end
-
-        # Sandbox path
-        full_command = build_command(ab_command,
-                                     session_name: cfg.session_name,
-                                     headed:       cfg.headed)
-        result = Shell.new.execute(command: full_command,
-                                   hard_timeout: BROWSER_COMMAND_TIMEOUT,
-                                   working_dir: working_dir)
-
-        # Session may have been closed — retry without session name
-        if !result[:success] && session_closed_error?(result) && cfg.session_name
-          full_command = build_command(ab_command, headed: cfg.headed)
-          result = Shell.new.execute(command: full_command,
-                                     hard_timeout: BROWSER_COMMAND_TIMEOUT,
-                                     working_dir: working_dir)
-        end
-
-        result[:action]       = action
-        result[:browser_mode] = :sandbox
-        result[:browser_notice] = sandbox_fallback_notice(browser_info) if use_user_profile
-
-        format_result_hash(result)
+        execute_user_browser(action, opts)
       rescue StandardError => e
-        { error: "Failed to run agent-browser: #{e.message}" }
+        if chrome_not_running_error?(e.message)
+          { error: CHROME_SETUP_GUIDE }
+        else
+          { error: "Browser error: #{e.message}" }
+        end
       end
 
       def format_call(args)
@@ -566,506 +182,708 @@ module Clacky
       end
 
       def format_result(result)
-        if result[:error]
-          "[Error] #{result[:error][0..80]}"
-        elsif result[:success]
-          stdout = result[:stdout] || ""
-          lines  = stdout.lines.size
-          "[OK] #{lines > 0 ? "#{lines} lines" : "Done"}"
-        else
-          stderr = result[:stderr] || "Failed"
-          "[Failed] #{stderr[0..80]}"
-        end
+        return "[Error] #{result[:error].to_s[0..80]}" if result[:error]
+        return "[OK] #{result[:output].to_s.lines.size} lines" if result[:output]
+        "[OK] Done"
       end
-
-      MAX_LLM_OUTPUT_CHARS = 6000
-      MAX_SNAPSHOT_CHARS   = 4000
 
       def format_result_for_llm(result)
         return result if result[:error]
 
-        stdout       = result[:stdout] || ""
-        stderr       = result[:stderr] || ""
-        action       = result[:action].to_s
-        command_name = action.empty? ? "browser" : action
+        action = result[:action].to_s
+        output = result[:output].to_s
 
-        compact = {
-          action:    action,
-          success:   result[:success],
-          exit_code: result[:exit_code]
-        }
+        output = compress_snapshot(output) if action == "snapshot"
+        max_chars = action == "snapshot" ? MAX_SNAPSHOT_CHARS : MAX_LLM_OUTPUT_CHARS
 
-        if action == "snapshot"
-          stdout    = compress_snapshot(stdout)
-          max_chars = MAX_SNAPSHOT_CHARS
-        else
-          max_chars = MAX_LLM_OUTPUT_CHARS
-        end
+        truncated = truncate_output(output, max_chars)
 
-        stdout_info = truncate_and_save(stdout, max_chars, "stdout", command_name)
-        compact[:stdout]      = stdout_info[:content]
-        compact[:stdout_full] = stdout_info[:temp_file] if stdout_info[:temp_file]
-
-        stderr_info = truncate_and_save(stderr, 500, "stderr", command_name)
-        compact[:stderr]      = stderr_info[:content] unless stderr.empty?
-        compact[:stderr_full] = stderr_info[:temp_file] if stderr_info[:temp_file]
-
-        compact[:browser_notice] = result[:browser_notice] if result[:browser_notice]
-        compact[:browser_mode]   = result[:browser_mode]   if result[:browser_mode]
-
-        compact
+        {
+          action:  action,
+          success: result[:success],
+          stdout:  truncated,
+          profile: result[:profile]
+        }.compact
       end
 
       private
 
       # -----------------------------------------------------------------------
-      # Action → agent-browser command string translation
+      # User browser (Chrome MCP / existing-session driver)
       # -----------------------------------------------------------------------
 
-      # Translates the structured action + options into an agent-browser CLI command.
-      # Returns a string like "snapshot -i -C" or "click @e1".
-      private def build_action_command(action, opts, real_browser: nil)
-        case action.to_s
-        when "snapshot"
-          build_snapshot_command(opts)
-        when "act"
-          build_act_command(opts)
-        when "open"
-          url = opts[:url] || opts["url"] || ""
-          # In real-browser mode open a new tab so we don't hijack the user's current page
-          real_browser ? "tab new #{Shellwords.escape(url)}" : "open #{Shellwords.escape(url)}"
-        when "navigate"
-          url = opts[:url] || opts["url"] || ""
-          "open #{Shellwords.escape(url)}"
-        when "tabs"
-          "tab list"
-        when "focus"
-          target_id = opts[:target_id] || opts["target_id"] || ""
-          # agent-browser switches to tab by index; target_id can be index or a ref
-          "tab #{Shellwords.escape(target_id)}"
-        when "close"
-          "close"
-        when "screenshot"
-          build_screenshot_command(opts)
-        when "pdf"
-          path = opts[:path] || opts["path"] || "page.pdf"
-          "pdf #{Shellwords.escape(path)}"
-        when "upload"
-          ref      = opts[:ref]      || opts["ref"]      || ""
-          selector = opts[:selector] || opts["selector"] || ""
-          files    = Array(opts[:files] || opts["files"] || [])
-          target   = ref.empty? ? Shellwords.escape(selector) : Shellwords.escape(ref)
-          file_args = files.map { |f| Shellwords.escape(f) }.join(" ")
-          "upload #{target} #{file_args}".strip
-        when "dialog"
-          response    = opts[:response]    || opts["response"]    || "accept"
-          prompt_text = opts[:prompt_text] || opts["prompt_text"]
-          if response.to_s == "dismiss"
-            "dialog dismiss"
-          elsif prompt_text
-            "dialog accept #{Shellwords.escape(prompt_text)}"
-          else
-            "dialog accept"
-          end
-        when "console"
-          "console"
-        when "status"
-          # agent-browser has no explicit status — check if the daemon is alive via version
-          "--version"
-        when "start"
-          # Launching the daemon is implicit; use a no-op snapshot to warm up
-          "snapshot -i"
-        when "stop"
-          "close"
-        else
-          # Unknown action — pass through as raw command for forward-compatibility
-          action.to_s
+      # Friendly setup guide returned when Chrome is not installed or not running.
+      # Shown to the user (and Agent) when Chrome remote debugging is not enabled.
+      # The strong wording ("STOP", "DO NOT") is intentional — it prevents the
+      # Agent from silently falling back to web_search or other workarounds.
+      CHROME_SETUP_GUIDE = <<~GUIDE.freeze
+        ⚠️  IMPORTANT — STOP and read this before doing anything else.
+
+        Chrome remote debugging is not enabled. You MUST ask the user to enable it
+        before retrying. Do NOT fall back to web_search or any other workaround.
+
+        Please tell the user:
+
+        ──────────────────────────────────────────────────
+        Chrome 还没有开启远程调试，需要你做一个操作：
+
+        1. 打开 Chrome，在地址栏输入：
+              chrome://inspect/#remote-debugging
+           按回车
+
+        2. 勾选 "Discover network targets"（如果没有勾选的话）
+
+        3. 下次 Clacky 控制浏览器时，Chrome 会弹出一个授权对话框，
+           点击「允许」即可。
+
+        完成后告诉我，我来重试。
+        ──────────────────────────────────────────────────
+
+        After the user confirms, retry the original browser action.
+      GUIDE
+
+      # Returns true if Google Chrome appears to be installed on this machine.
+      private def chrome_installed?
+        case RbConfig::CONFIG["host_os"]
+        when /darwin/
+          File.exist?("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") ||
+            File.exist?(File.expand_path("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
+        when /mswin|mingw|windows/i
+          local = ENV.fetch("LOCALAPPDATA", "")
+          prog  = ENV.fetch("ProgramFiles", "C:\Program Files")
+          prog86 = ENV.fetch("ProgramFiles(x86)", "C:\Program Files (x86)")
+          File.exist?(File.join(local, "Google", "Chrome", "Application", "chrome.exe")) ||
+            File.exist?(File.join(prog, "Google", "Chrome", "Application", "chrome.exe")) ||
+            File.exist?(File.join(prog86, "Google", "Chrome", "Application", "chrome.exe"))
+        else # linux
+          system("which google-chrome > /dev/null 2>&1") ||
+            system("which google-chrome-stable > /dev/null 2>&1") ||
+            File.exist?("/usr/bin/google-chrome") ||
+            File.exist?("/usr/bin/google-chrome-stable")
         end
       end
 
-      # Builds "snapshot [-i] [-C] [-c] [-d N] [-s SEL]" from options.
-      private def build_snapshot_command(opts)
-        parts = ["snapshot"]
-        parts << "-i" if opts[:interactive] || opts["interactive"]
-        parts << "-C" if opts[:cursor]      || opts["cursor"]
-        parts << "-c" if opts[:compact]     || opts["compact"]
-
-        depth = opts[:depth] || opts["depth"]
-        parts += ["-d", depth.to_s] if depth
-
-        selector = opts[:selector] || opts["selector"]
-        parts += ["-s", Shellwords.escape(selector)] if selector && !selector.empty?
-
-        parts.join(" ")
+      # Returns true if the error message from chrome-devtools-mcp indicates
+      # that Chrome is not running or remote debugging is not enabled.
+      private def chrome_not_running_error?(message)
+        msg = message.to_s.downcase
+        msg.include?("could not connect to chrome") ||
+          msg.include?("devtoolsactiveport") ||
+          msg.include?("remote debugging") ||
+          msg.include?("chrome is running")
       end
 
-      # Builds an interaction command ("click @e1", "fill @e2 'text'", etc.)
-      # from the act opts hash.
-      private def build_act_command(opts)
-        kind      = (opts[:kind]     || opts["kind"]     || "click").to_s
-        ref       = opts[:ref]       || opts["ref"]
-        selector  = opts[:selector]  || opts["selector"]
-        target    = ref && !ref.empty? ? ref : selector.to_s
+      private def execute_user_browser(action, opts)
+        unless chrome_mcp_available?
+          return {
+            error: "chrome-devtools-mcp requires Node.js and npx. " \
+                   "Install Node.js 18+ and ensure 'npx' is in PATH."
+          }
+        end
+
+        unless chrome_installed?
+          return {
+            error: <<~MSG
+              ⚠️  IMPORTANT — STOP and tell the user:
+
+              ──────────────────────────────────────────────────
+              浏览器自动化需要安装 Google Chrome。
+
+              请先安装 Chrome：https://www.google.com/chrome/
+              安装完成后告诉我，我来重试。
+              ──────────────────────────────────────────────────
+
+              Do NOT fall back to web_search or any other workaround.
+            MSG
+          }
+        end
+
+        case action.to_s
+        when "tabs"
+          result = mcp_call("list_pages")
+          pages  = extract_pages(result)
+          { action: "tabs", success: true, profile: "user", output: format_tabs(pages), tabs: pages }
+        when "snapshot"
+          do_user_snapshot(opts)
+        when "open"
+          url = require_url(opts)
+          return url if url.is_a?(Hash)
+          result = mcp_call("new_page", { url: url })
+          pages  = extract_pages(result)
+          page   = pages.last || {}
+          { action: "open", success: true, profile: "user",
+            targetId: page[:id]&.to_s, url: url, output: "Opened: #{url}" }
+        when "navigate"
+          url       = require_url(opts)
+          return url if url.is_a?(Hash)
+          target_id = resolve_target_id(opts)
+          return target_id if target_id.is_a?(Hash)
+          mcp_call("navigate_page", { pageId: target_id.to_i, type: "url", url: url })
+          { action: "navigate", success: true, profile: "user",
+            targetId: target_id.to_s, url: url, output: "Navigated to: #{url}" }
+        when "focus"
+          target_id = resolve_target_id(opts)
+          return target_id if target_id.is_a?(Hash)
+          mcp_call("select_page", { pageId: target_id.to_i, bringToFront: true })
+          { action: "focus", success: true, profile: "user", output: "Focused tab #{target_id}" }
+        when "close"
+          target_id = resolve_target_id(opts)
+          return target_id if target_id.is_a?(Hash)
+          mcp_call("close_page", { pageId: target_id.to_i })
+          { action: "close", success: true, profile: "user", output: "Closed tab #{target_id}" }
+        when "act"
+          do_user_act(opts)
+        when "screenshot"
+          do_user_screenshot(opts)
+        when "status"
+          result = mcp_call("list_pages")
+          pages  = extract_pages(result)
+          { action: "status", success: true, profile: "user",
+            output: "Browser running. #{pages.size} tab(s) open.", tabs: pages }
+        else
+          { error: "Action '#{action}' is not supported for profile=user." }
+        end
+      end
+
+      private def do_user_snapshot(opts)
+        target_id = resolve_target_id(opts)
+        return target_id if target_id.is_a?(Hash)
+
+        raw = mcp_call("take_snapshot", { pageId: target_id.to_i })
+        snapshot_node = extract_snapshot(raw)
+
+        interactive = opts[:interactive] || opts["interactive"]
+        compact_opt = opts[:compact]     || opts["compact"]
+        max_depth   = opts[:depth]       || opts["depth"]
+
+        text = build_ai_snapshot(snapshot_node,
+                                 interactive: interactive,
+                                 compact: compact_opt,
+                                 max_depth: max_depth)
+
+        { action: "snapshot", success: true, profile: "user",
+          targetId: target_id.to_s, output: text }
+      end
+
+      private def do_user_act(opts)
+        kind      = (opts[:kind] || opts["kind"] || "click").to_s
+        target_id = resolve_target_id(opts)
+        return target_id if target_id.is_a?(Hash)
+
+        page_id = target_id.to_i
+        ref     = opts[:ref] || opts["ref"]
 
         case kind
-        when "click"
-          double = opts[:double_click] || opts["double_click"]
-          double ? "dblclick #{target}" : "click #{target}"
-        when "dblclick"
-          "dblclick #{target}"
-        when "type"
-          text = opts[:text] || opts["text"] || ""
-          "type #{target} #{Shellwords.escape(text)}"
+        when "click", "dblclick"
+          uid = require_ref(ref)
+          return uid if uid.is_a?(Hash)
+          args = { pageId: page_id, uid: uid }
+          args[:dblClick] = true if kind == "dblclick" || opts[:double_click] || opts["double_click"]
+          mcp_call("click", args)
         when "fill"
-          text = opts[:text] || opts["text"] || ""
-          "fill #{target} #{Shellwords.escape(text)}"
+          uid   = require_ref(ref)
+          return uid if uid.is_a?(Hash)
+          value = opts[:text] || opts["text"] || ""
+          mcp_call("fill", { pageId: page_id, uid: uid, value: value })
+        when "type"
+          uid   = require_ref(ref)
+          return uid if uid.is_a?(Hash)
+          value = opts[:text] || opts["text"] || ""
+          mcp_call("fill", { pageId: page_id, uid: uid, value: value })
         when "press"
           key = opts[:key] || opts["key"] || "Enter"
-          "press #{Shellwords.escape(key)}"
+          mcp_call("press_key", { pageId: page_id, key: key })
         when "hover"
-          "hover #{target}"
-        when "check"
-          "check #{target}"
-        when "uncheck"
-          "uncheck #{target}"
-        when "select"
-          values = Array(opts[:values] || opts["values"] || [])
-          "select #{target} #{values.map { |v| Shellwords.escape(v) }.join(' ')}".strip
+          uid = require_ref(ref)
+          return uid if uid.is_a?(Hash)
+          mcp_call("hover", { pageId: page_id, uid: uid })
         when "drag"
-          target_ref = opts[:target_ref] || opts["target_ref"] || ""
-          "drag #{target} #{target_ref}"
+          uid        = require_ref(ref)
+          return uid if uid.is_a?(Hash)
+          target_uid = opts[:target_ref] || opts["target_ref"] || ""
+          mcp_call("drag", { pageId: page_id, from_uid: uid, to_uid: target_uid })
+        when "select"
+          uid    = require_ref(ref)
+          return uid if uid.is_a?(Hash)
+          values = Array(opts[:values] || opts["values"] || [])
+          mcp_call("fill", { pageId: page_id, uid: uid, value: values.first.to_s })
         when "scroll"
           direction = opts[:direction] || opts["direction"] || "down"
-          amount    = opts[:amount]    || opts["amount"]
-          amount ? "scroll #{direction} #{amount}" : "scroll #{direction}"
-        when "scrollintoview"
-          "scrollintoview #{target}"
+          amount    = opts[:amount]    || opts["amount"]    || 300
+          js = "window.scrollBy(#{direction == 'right' || direction == 'left' ?
+                                   (direction == 'left' ? -amount.to_i : amount.to_i) : 0
+                                 }, #{direction == 'up' ? -amount.to_i :
+                                      direction == 'down' ? amount.to_i : 0})"
+          mcp_call("evaluate_script", { pageId: page_id, function: "() => { #{js} }" })
         when "wait"
           ms         = opts[:ms]         || opts["ms"]
           load_state = opts[:load_state] || opts["load_state"]
-          wait_sel   = opts[:selector]   || opts["selector"]
+          sel        = opts[:selector]   || opts["selector"]
           if ms
-            "wait #{ms}"
-          elsif load_state
-            "wait --load #{Shellwords.escape(load_state)}"
-          elsif wait_sel && !wait_sel.empty?
-            "wait #{Shellwords.escape(wait_sel)}"
+            sleep(ms.to_i / 1000.0)
+            { action: "act", success: true, profile: "user", output: "Waited #{ms}ms" }
+            return { action: "act", success: true, profile: "user", output: "Waited #{ms}ms" }
+          elsif sel
+            mcp_call("wait_for", { pageId: page_id, text: [sel] })
           else
-            "wait 1000"
+            sleep(1)
           end
         when "evaluate"
-          js = opts[:js] || opts["js"] || ""
-          "eval #{Shellwords.escape(js)}"
-        when "close"
-          "close"
+          js     = opts[:js] || opts["js"] || ""
+          result = mcp_call("evaluate_script", {
+            pageId: page_id,
+            function: "() => { return (#{js}) }"
+          })
+          value = extract_message(result)
+          return { action: "act", success: true, profile: "user",
+                   output: value.to_s }
         else
-          # Unknown kind — pass through
-          "#{kind} #{target}".strip
+          return { error: "Unknown act kind: #{kind}" }
         end
+
+        { action: "act", success: true, profile: "user", output: "#{kind} completed." }
       end
 
-      # Builds the screenshot command string.
-      private def build_screenshot_command(opts)
-        parts = ["screenshot"]
+      private def do_user_screenshot(opts)
+        target_id = resolve_target_id(opts)
+        return target_id if target_id.is_a?(Hash)
+
         format    = opts[:format]    || opts["format"]    || "jpeg"
-        quality   = opts[:quality]   || opts["quality"]   || 50
-        full_page = opts[:full_page] || opts["full_page"]
-        path      = opts[:path]      || opts["path"]
+        full_page = opts[:full_page] || opts["full_page"] || false
 
-        parts += ["--screenshot-format", format]
-        parts += ["--screenshot-quality", quality.to_s] if format.to_s == "jpeg"
-        parts << "--full"  if full_page
-        parts << Shellwords.escape(path) if path && !path.empty?
+        tmp_file = File.join(Dir.tmpdir, "clacky_screenshot_#{Time.now.to_i}.#{format}")
+        mcp_call("take_screenshot", {
+          pageId:   target_id.to_i,
+          filePath: tmp_file,
+          format:   format,
+          fullPage: full_page
+        })
 
-        parts.join(" ")
+        { action: "screenshot", success: true, profile: "user",
+          path: tmp_file, output: "Screenshot saved: #{tmp_file}" }
       end
 
       # -----------------------------------------------------------------------
-      # Real-browser connection — two-stage discovery
+      # Sandbox browser (agent-browser fallback — not Chrome MCP)
       # -----------------------------------------------------------------------
 
-      # Returns a CDP port number for the user's default Chromium browser, or nil.
-      #
-      # We exclusively use the browser's own DevToolsActivePort file, which
-      # Chrome/Edge 144+ writes to <userDataDir> after the user allows remote
-      # debugging. This approach is immune to other Chromium processes that may
-      # be running on well-known ports (e.g. a dev Chrome with --remote-debugging-port=9222).
-      #
-      # Stage 1 — read DevToolsActivePort (already allowed, normal path)
-      # Stage 2 — trigger the attach consent dialog, then poll for the file
-      # Returns a notice string to include in the sandbox-fallback result, explaining
-      # why we couldn't connect to the user's real browser.
-      # Returns nil when the default browser IS Chromium and already connected.
-      private def sandbox_fallback_notice(browser_info)
-        if browser_info.nil?
-          # Could not detect any Chromium-based browser at all.
-          "⚠️  No Chromium-based browser found on this system. " \
-          "Using a sandboxed browser instead. " \
-          "For best results, please install Google Chrome, Microsoft Edge, or Brave."
+      # -----------------------------------------------------------------------
+      # Chrome MCP — process management & JSON-RPC over stdio
+      # -----------------------------------------------------------------------
 
-        elsif browser_info[:default_is_chromium] == false
-          # A Chromium browser was found as fallback, but the OS default is not Chromium.
-          fallback_kind = browser_info[:kind].to_s.capitalize
-          "⚠️  Your default browser is not Chromium-based, so it cannot be controlled by the agent. " \
-          "Using #{fallback_kind} (found on this system) in sandboxed mode instead. " \
-          "For the best experience, set Chrome, Edge, or Brave as your default browser."
-
-        end
-        # Returns nil implicitly when the browser is Chromium and CDP is reachable.
-      end
-
-      # Returns a CDP port or nil.
-      #
-      # Stage 1 — DevToolsActivePort file exists AND HTTP /json/version returns 200.
-      #           Fast-path: the user's browser is already running with CDP enabled
-      #           (e.g. launched via edge://inspect/#remote-debugging previously).
-      #           We connect directly — zero disruption to the user's session.
-      #
-      # Stage 2 — No reachable CDP port. We spawn a brand-new, isolated browser
-      #           instance with --remote-debugging-port=0 in a temporary user-data-dir.
-      #           This approach:
-      #             • Never touches the user's running browser or their open tabs
-      #             • Completely bypasses the approval-mode consent dialog (which only
-      #               appears for *attach* connections, not self-debugged launches)
-      #             • Works even when the user's browser is not running at all
-      #           The new instance starts headless in the background. The agent's
-      #           commands run inside it, isolated from the user's real profile.
-      #
-      # Returns nil when CDP cannot be established (unsupported platform, browser
-      # binary not found, or spawn timed out).
-      private def resolve_user_browser_cdp_port(info = nil)
-        info ||= ChromiumDetector.detect
-        return nil unless info
-
-        # Stage 1: DevToolsActivePort file exists AND CDP HTTP is fully ready (200 OK).
-        port = read_dev_tools_port_once(info[:user_data_dir])
-        if port && cdp_port_alive?(port)
-          return port
+      # Returns the path to a Node.js binary that meets MIN_NODE_MAJOR.
+      # Searches nvm-managed versions first (newest first), then falls back
+      # to the system `node`.  Returns nil if no suitable node is found.
+      private def find_node_binary
+        # Check nvm-managed versions (newest LTS first)
+        nvm_base = File.expand_path("~/.nvm/versions/node")
+        if Dir.exist?(nvm_base)
+          candidates = Dir.glob(File.join(nvm_base, "v*/bin/node")).sort.reverse
+          candidates.each do |path|
+            version_str = path.split("/").reverse[2] # e.g. "v22.22.0"
+            major = version_str.gsub(/^v/, "").split(".").first.to_i
+            return path if major >= MIN_NODE_MAJOR
+          end
         end
 
-        # Stage 2: spawn a new browser instance with CDP enabled, reusing the
-        # user's real user-data-dir so login state and cookies are preserved.
-        spawn_debugging_browser(info[:kind], info[:user_data_dir])
+        # Fall back to system node
+        sys_node = `which node 2>/dev/null`.strip
+        return nil if sys_node.empty? || !File.executable?(sys_node)
+
+        version_line = `#{sys_node} --version 2>/dev/null`.strip # "v22.1.0"
+        major = version_line.gsub(/^v/, "").split(".").first.to_i
+        major >= MIN_NODE_MAJOR ? sys_node : nil
       end
 
-      # Returns true if the CDP endpoint at the given port is fully ready —
-      # i.e. GET /json/version returns HTTP 200 with JSON content.
-      #
-      # Edge in approval-mode listens on TCP but returns HTTP 404 until the user
-      # clicks "Allow" in the consent dialog. TCP-only probes cannot distinguish
-      # between "ready" and "waiting for approval", so we use HTTP here.
-      private def cdp_port_alive?(port)
-        uri = URI("http://127.0.0.1:#{port}/json/version")
-        res = Net::HTTP.start(uri.host, uri.port, open_timeout: 1, read_timeout: 2) do |http|
-          http.get(uri.path)
-        end
-        res.is_a?(Net::HTTPOK) && !res.body.to_s.empty?
-      rescue StandardError
-        false
+      # Returns true if a suitable Node.js + npx are available for Chrome MCP.
+      private def chrome_mcp_available?
+        !!find_node_binary
       end
 
+      # Build the [env, npx_path, *args] command array for chrome-devtools-mcp.
+      # If user_data_dir is provided, appends --userDataDir.
+      private def build_mcp_command(user_data_dir: nil)
+        node_bin  = find_node_binary
+        node_dir  = File.dirname(node_bin)
+        npx_path  = File.join(node_dir, "npx")
+        npx_path  = "npx" unless File.executable?(npx_path)
 
-      # Read DevToolsActivePort immediately — no waiting.
-      # Returns port Integer or nil.
-      private def read_dev_tools_port_once(user_data_dir)
-        port_file = File.join(user_data_dir, "DevToolsActivePort")
-        return nil unless File.exist?(port_file)
-
-        content = File.read(port_file).strip
-        port    = content.lines.first&.strip
-        (port =~ /\A\d+\z/ && port.to_i > 0) ? port.to_i : nil
-      rescue StandardError
-        nil
-      end
-
-      # Poll for DevToolsActivePort up to `wait_secs` seconds.
-      private def read_dev_tools_port(user_data_dir, wait_secs)
-        deadline = Time.now + wait_secs
-        loop do
-          port = read_dev_tools_port_once(user_data_dir)
-          return port if port
-          break if Time.now >= deadline
-          sleep DEV_TOOLS_PORT_POLL_INTERVAL
-        end
-        nil
-      end
-
-      # Returns true if the browser's Local State indicates the user has enabled
-      # remote debugging via the inspect page (devtools.remote_debugging.user-enabled).
-      #
-      # When this pref is true, the browser starts the CDP server automatically
-      # on launch (approval-mode). When false, it does nothing until the user
-      # ticks the checkbox on the inspect page.
-      #
-      # Falls back to false if the file cannot be read or parsed — safer to
-      # assume setup is needed than to wait too short.
-      private def cdp_user_enabled?(user_data_dir)
-        local_state_path = File.join(user_data_dir, "Local State")
-        return false unless File.exist?(local_state_path)
-
-        data = JSON.parse(File.read(local_state_path))
-        data.dig("devtools", "remote_debugging", "user-enabled") == true
-      rescue StandardError
-        false
-      end
-
-      # Open the browser's inspect page to trigger the "Allow remote debugging?"
-      # consent dialog (Chrome/Edge 144+ feature).
-      # MacOS application names for each browser kind (used with `open -a`)
-      MAC_BROWSER_APP_NAMES = {
-        chrome:   "Google Chrome",
-        edge:     "Microsoft Edge",
-        brave:    "Brave Browser",
-        chromium: "Chromium",
-      }.freeze
-
-      # Internal URL schemes for the DevTools inspect page
-      CDP_INSPECT_SCHEMES = {
-        chrome:   "chrome",
-        edge:     "edge",
-        brave:    "brave",
-        chromium: "chrome",
-      }.freeze
-
-      # macOS binary paths for each browser kind — used to launch a new debugging
-      # instance with --remote-debugging-port=0 directly (not via `open -a`, which
-      # doesn't forward flags to an already-running browser process).
-      MAC_BROWSER_EXECUTABLES = {
-        chrome:   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        edge:     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        brave:    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-        chromium: "/Applications/Chromium.app/Contents/MacOS/Chromium",
-      }.freeze
-
-      # Spawn a new browser instance with --remote-debugging-port=0, reusing the
-      # user's real user-data-dir (so cookies and login state are fully preserved).
-      #
-      # Chromium prevents two processes from sharing the same user-data-dir via
-      # three symlink "Singleton" files (SingletonLock, SingletonCookie,
-      # SingletonSocket). We remove those files before launching so the new
-      # instance treats the directory as unclaimed. The original browser process
-      # (if running) is left completely undisturbed — the user's tabs stay open.
-      #
-      # The browser writes the chosen port to DevToolsActivePort in the data dir
-      # as soon as its CDP server is ready. We poll for that file and do an HTTP
-      # health-check before returning.
-      #
-      # Returns the CDP port Integer on success, or nil on failure.
-      private def spawn_debugging_browser(browser_kind, user_data_dir)
-        return nil unless RUBY_PLATFORM.include?("darwin")
-
-        exe = MAC_BROWSER_EXECUTABLES[browser_kind]
-        exe = File.expand_path(exe)
-        return nil unless exe && File.executable?(exe)
-
-        # Remove Chromium's singleton lock files so the new instance can claim
-        # the directory without conflicting with the already-running browser.
-        %w[SingletonLock SingletonCookie SingletonSocket].each do |f|
-          File.delete(File.join(user_data_dir, f)) rescue nil
-        end
-
-        # Remove stale port file so we can detect the fresh one cleanly.
-        File.delete(File.join(user_data_dir, "DevToolsActivePort")) rescue nil
-
-        # Launch directly (not via `open -a`) so flags reach the new process.
-        # Stdout/stderr go to /dev/null to avoid polluting agent output.
-        Process.spawn(
-          exe,
-          "--remote-debugging-port=0",
-          "--user-data-dir=#{user_data_dir}",
-          "--no-first-run",
-          [:out, :err] => File::NULL
-        )
-        # Intentionally no Process.wait — browser must stay running.
-
-        # Poll DevToolsActivePort, then HTTP-verify CDP is truly ready.
-        deadline = Time.now + DEV_TOOLS_PORT_WAIT_SECS_SHORT
-        loop do
-          port = read_dev_tools_port_once(user_data_dir)
-          return port if port && cdp_port_alive?(port)
-          break if Time.now >= deadline
-          sleep DEV_TOOLS_PORT_POLL_INTERVAL
-        end
-
-        nil
-      end
-
-      # -----------------------------------------------------------------------
-      # Command building
-      # -----------------------------------------------------------------------
-
-      private def build_command(command, cdp_port: nil, session_name: nil, headed: true)
-        parts = [AGENT_BROWSER_BIN]
-        if cdp_port
-          # Connect to user's real browser via CDP — no session-name, no --headed flag
-          parts += ["--cdp", cdp_port.to_s]
-        else
-          parts << "--headed" if headed
-          parts += ["--session-name", Shellwords.escape(session_name)] if session_name
-        end
-        parts << command
-        parts.join(" ")
-      end
-
-      # -----------------------------------------------------------------------
-      # Error detection helpers
-      # -----------------------------------------------------------------------
-
-      private def user_browser_connect_error?(result)
-        output = "#{result[:stderr]}#{result[:stdout]}"
-        # Typical messages when the browser isn't reachable or the CDP port is gone
-        output.match?(/ECONNREFUSED|ECONNRESET|net::ERR|connect.*refused|Cannot connect|not.*running|Failed to connect/i)
-      end
-
-      private def session_closed_error?(result)
-        output = "#{result[:stderr]}#{result[:stdout]}"
-        output.include?("has been close") || output.include?("has been closed")
-      end
-
-      # -----------------------------------------------------------------------
-      # agent-browser availability
-      # -----------------------------------------------------------------------
-
-      private def agent_browser_ready?
-        agent_browser_installed? && !agent_browser_outdated?
-      end
-
-      private def not_ready_response
-        {
-          error: "agent-browser not ready",
-          instructions: "Tell the user that browser automation is not set up yet, and ask them to run `/onboard browser` to complete the setup."
+        # Prepend the node bin dir so npx resolves the correct node executable
+        env = {
+          "PATH"  => "#{node_dir}:#{ENV.fetch('PATH', '')}",
+          "NODE"  => node_bin
         }
+
+        args = CHROME_MCP_BASE_ARGS.dup
+        if user_data_dir && !user_data_dir.to_s.empty?
+          args += ["--userDataDir", user_data_dir.to_s]
+        end
+
+        [env, npx_path, *args]
       end
 
-      private def agent_browser_installed?
-        result = Shell.new.execute(command: "which #{AGENT_BROWSER_BIN}")
-        result[:success] && !result[:stdout].to_s.strip.empty?
+      # Calls a Chrome MCP tool over the persistent daemon process.
+      #
+      # On the first call (or after the daemon dies), `ensure_mcp_process!` starts
+      # a new npx process and completes the MCP initialize handshake.  Subsequent
+      # calls reuse the same process — Chrome's "Allow remote debugging" dialog is
+      # shown exactly once per daemon lifetime.
+      #
+      # Protocol sequence (per MCP spec):
+      #   Handshake (once on daemon start):
+      #     1. client → initialize
+      #     2. server → initialize result
+      #     3. client → notifications/initialized
+      #   Per call (reusing the same process):
+      #     4. client → tools/call  (with unique id)
+      #     5. server → tools/call result
+      #
+      # Thread safety: all state mutations are protected by @@mcp_mutex.
+      private def mcp_call(tool_name, arguments = {}, user_data_dir: nil)
+        call_resp = nil
+
+        @@mcp_mutex.synchronize do
+          # Ensure the daemon is alive (start + handshake if needed)
+          ensure_mcp_process!(user_data_dir: user_data_dir)
+
+          proc_state = @@mcp_process
+          call_id    = @@mcp_call_id
+          @@mcp_call_id += 1
+
+          call_msg = mcp_json_rpc("tools/call", {
+            name:      tool_name,
+            arguments: arguments
+          }, id: call_id)
+
+          proc_state[:stdin].write(call_msg + "\n")
+          proc_state[:stdin].flush
+
+          call_resp = mcp_read_response(proc_state[:stdout], target_id: call_id,
+                                        timeout: MCP_CALL_TIMEOUT)
+
+          unless call_resp
+            # Daemon may have died — clean up so next call restarts it
+            kill_mcp_process!
+            raise "Chrome MCP tools/call '#{tool_name}' timed out after #{MCP_CALL_TIMEOUT}s"
+          end
+
+          # Propagate JSON-RPC protocol errors as Ruby exceptions
+          if call_resp["error"]
+            err = call_resp["error"]
+            raise "Chrome MCP error: #{err.is_a?(Hash) ? err['message'] : err}"
+          end
+
+          result = call_resp["result"] || {}
+
+          # Propagate tool-level errors (isError: true means the MCP tool itself failed,
+          # e.g. Chrome not running, page not found, etc.)
+          if result["isError"]
+            text = extract_text_content(result)
+            raise text.empty? ? "Chrome MCP tool '#{tool_name}' failed" : text
+          end
+
+          result
+        end
       end
 
-      private def agent_browser_outdated?
-        result  = Shell.new.execute(command: "#{AGENT_BROWSER_BIN} --version")
-        version = result[:stdout].to_s.strip.split.last
-        return false if version.nil? || version.empty?
-        Gem::Version.new(version) < Gem::Version.new(MIN_AGENT_BROWSER_VERSION)
-      rescue StandardError
+      # ---------------------------------------------------------------------------
+      # Daemon process management (called from within @@mcp_mutex)
+      # ---------------------------------------------------------------------------
+
+      # Ensures the persistent MCP daemon process is running and the MCP handshake
+      # has been completed.  If the process is dead or was never started, a new one
+      # is spawned and the initialize/initialized sequence is executed.
+      #
+      # Must be called while holding @@mcp_mutex.
+      private def ensure_mcp_process!(user_data_dir: nil)
+        return if mcp_process_alive?
+
+        cmd = build_mcp_command(user_data_dir: user_data_dir)
+
+        stdin, stdout, stderr_io, wait_thr = Open3.popen3(*cmd)
+        # Discard stderr asynchronously to avoid pipe buffer deadlocks
+        Thread.new { stderr_io.read rescue nil }
+
+        # MCP handshake: initialize → result → notifications/initialized
+        init_msg = mcp_json_rpc("initialize", {
+          protocolVersion: "2024-11-05",
+          capabilities:    {},
+          clientInfo:      { name: "clacky", version: "1.0" }
+        }, id: 1)
+
+        notify_msg = JSON.generate({
+          jsonrpc: "2.0",
+          method:  "notifications/initialized",
+          params:  {}
+        })
+
+        stdin.write(init_msg + "\n")
+        stdin.flush
+
+        init_resp = mcp_read_response(stdout, target_id: 1, timeout: MCP_HANDSHAKE_TIMEOUT)
+        unless init_resp
+          Process.kill("TERM", wait_thr.pid) rescue nil
+          raise "Chrome MCP initialize handshake timed out"
+        end
+
+        stdin.write(notify_msg + "\n")
+        stdin.flush
+
+        # Handshake complete — store daemon state at class level
+        @@mcp_process = { stdin: stdin, stdout: stdout, pid: wait_thr.pid, wait_thr: wait_thr }
+        # Reset call id counter (id=1 already used for initialize)
+        @@mcp_call_id = 2
+      end
+
+      # Returns true if the daemon process is running and its stdin/stdout are open.
+      # Must be called while holding @@mcp_mutex.
+      private def mcp_process_alive?
+        return false if @@mcp_process.nil?
+
+        ps = @@mcp_process
+        # Check whether the process is still alive via kill(0)
+        Process.kill(0, ps[:pid])
+        !ps[:stdin].closed? && !ps[:stdout].closed?
+      rescue Errno::ESRCH, Errno::EPERM
+        # Process gone — clean up stale state
+        kill_mcp_process!
         false
       end
 
-      # -----------------------------------------------------------------------
-      # Output formatting helpers
-      # -----------------------------------------------------------------------
+      # Forcibly terminates the daemon process and clears class-level state.
+      # Safe to call even when @@mcp_process is nil.
+      # Must be called while holding @@mcp_mutex (or during teardown).
+      private def kill_mcp_process!
+        ps = @@mcp_process
+        return unless ps
 
-      # Normalises the raw Shell result into the hash format used internally
-      private def format_result_hash(result)
-        result
+        Process.kill("TERM", ps[:pid]) rescue nil
+        ps[:stdin].close  rescue nil
+        ps[:stdout].close rescue nil
+        @@mcp_process = nil
       end
 
-      # Strip noise from snapshot output to reduce token usage.
-      #
-      # Removes:
-      #   - "- /url: ..." lines         — LLM uses [ref=eN], not URLs
-      #   - "- /placeholder: ..." lines  — already shown inline in textbox label
-      #   - bare "- img" lines with no alt text — zero information
+      # Public class-level method to shut down the daemon (e.g. at exit or in tests).
+      def self.stop_mcp_process!
+        @@mcp_mutex.synchronize do
+          ps = @@mcp_process
+          return unless ps
+
+          Process.kill("TERM", ps[:pid]) rescue nil
+          ps[:stdin].close  rescue nil
+          ps[:stdout].close rescue nil
+          @@mcp_process = nil
+        end
+      end
+
+      # Build a JSON-RPC 2.0 request message string (with id)
+      private def mcp_json_rpc(method, params, id:)
+        JSON.generate({ jsonrpc: "2.0", id: id, method: method, params: params })
+      end
+
+      # Read newline-delimited JSON from stdout until a message with the given
+      # id is found, or timeout expires.  Returns the parsed Hash or nil.
+      private def mcp_read_response(io, target_id:, timeout: 10)
+        Timeout.timeout(timeout) do
+          loop do
+            line = io.gets
+            break if line.nil?
+            line = line.strip
+            next if line.empty?
+            begin
+              msg = JSON.parse(line)
+              return msg if msg.is_a?(Hash) && msg["id"] == target_id
+            rescue JSON::ParserError
+              next
+            end
+          end
+          nil
+        end
+      rescue Timeout::Error
+        nil
+      end
+
+      # -----------------------------------------------------------------------
+      # MCP response extractors
+      # -----------------------------------------------------------------------
+
+      private def extract_pages(result)
+        return [] unless result.is_a?(Hash)
+
+        # Try structuredContent.pages first
+        structured = result["structuredContent"]
+        if structured.is_a?(Hash) && structured["pages"].is_a?(Array)
+          return structured["pages"].map do |p|
+            { id: p["id"], url: p["url"], selected: p["selected"] == true }
+          end
+        end
+
+        # Fall back to text content parsing
+        text = extract_text_content(result)
+        parse_pages_from_text(text)
+      end
+
+      private def extract_snapshot(result)
+        return {} unless result.is_a?(Hash)
+
+        structured = result["structuredContent"]
+        if structured.is_a?(Hash) && structured["snapshot"].is_a?(Hash)
+          return structured["snapshot"]
+        end
+
+        # Try content array
+        text = extract_text_content(result)
+        begin
+          JSON.parse(text)
+        rescue StandardError
+          {}
+        end
+      end
+
+      private def extract_message(result)
+        return "" unless result.is_a?(Hash)
+
+        structured = result["structuredContent"]
+        if structured.is_a?(Hash)
+          return structured["message"].to_s if structured["message"]
+        end
+
+        extract_text_content(result)
+      end
+
+      private def extract_text_content(result)
+        return "" unless result.is_a?(Hash)
+
+        content = result["content"]
+        return "" unless content.is_a?(Array)
+
+        content.filter_map do |entry|
+          entry["text"] if entry.is_a?(Hash) && entry["text"].is_a?(String)
+        end.join("\n")
+      end
+
+      private def parse_pages_from_text(text)
+        text.each_line.filter_map do |line|
+          m = line.match(/^\s*(\d+):\s+(.+?)(?:\s+\[(selected)\])?\s*$/i)
+          next unless m
+          { id: m[1].to_i, url: m[2].strip, selected: !m[3].nil? }
+        end
+      end
+
+      private def format_tabs(pages)
+        return "No open tabs." if pages.empty?
+        pages.map { |p| "#{p[:id]}: #{p[:url]}#{p[:selected] ? ' [selected]' : ''}" }.join("\n")
+      end
+
+      # -----------------------------------------------------------------------
+      # Snapshot rendering (ChromeMcpSnapshotNode → AI text format)
+      # -----------------------------------------------------------------------
+
+      INTERACTIVE_ROLES = %w[
+        button link textbox checkbox radio select combobox
+        menuitem option tab switch searchbox spinbutton
+        slider menuitemcheckbox menuitemradio
+      ].freeze
+
+      STRUCTURAL_ROLES = %w[
+        generic none presentation group region section
+      ].freeze
+
+      CONTENT_ROLES = %w[
+        heading paragraph text statictext image img
+        listitem term definition
+      ].freeze
+
+      private def build_ai_snapshot(node, interactive: false, compact: false, max_depth: nil)
+        return "" unless node.is_a?(Hash) && !node.empty?
+
+        lines = []
+        refs  = {}
+        visit_node(node, 0, lines, refs,
+                   interactive: interactive,
+                   compact: compact,
+                   max_depth: max_depth)
+        lines.join("\n")
+      end
+
+      private def visit_node(node, depth, lines, refs, interactive:, compact:, max_depth:)
+        return if max_depth && depth > max_depth
+
+        role = node["role"].to_s.downcase.strip
+        role = "generic" if role.empty?
+        name = node["name"].to_s.strip
+        uid  = node["id"].to_s.strip
+        val  = node["value"]
+        desc = node["description"].to_s.strip
+
+        # Decide whether to render this node (but always recurse into children)
+        render = true
+        render = false if interactive && !INTERACTIVE_ROLES.include?(role)
+        render = false if compact && STRUCTURAL_ROLES.include?(role) && name.empty?
+
+        if render
+          line = "#{" " * (depth * 2)}- #{role}"
+          line += " \"#{escape_quoted(name)}\"" unless name.empty?
+
+          # Assign ref if interactive or named content role
+          if uid && !uid.empty? && (INTERACTIVE_ROLES.include?(role) ||
+                                     (CONTENT_ROLES.include?(role) && !name.empty?))
+            refs[uid] = { role: role, name: name }
+            line += " [ref=#{uid}]"
+          end
+
+          line += " value=\"#{escape_quoted(val.to_s)}\"" unless val.nil? || val.to_s.empty?
+          line += " description=\"#{escape_quoted(desc)}\"" unless desc.empty?
+
+          lines << line
+        end
+
+        # Always recurse into children regardless of whether this node was rendered
+        child_depth = render ? depth + 1 : depth
+        Array(node["children"]).each do |child|
+          visit_node(child, child_depth, lines, refs,
+                     interactive: interactive,
+                     compact: compact,
+                     max_depth: max_depth)
+        end
+      end
+
+      private def escape_quoted(str)
+        str.to_s.gsub("\\", "\\\\").gsub('"', '\\"')
+      end
+
+      # -----------------------------------------------------------------------
+      # Parameter helpers
+      # -----------------------------------------------------------------------
+
+      private def require_url(opts)
+        url = opts[:url] || opts["url"] || ""
+        return { error: "url is required for this action" } if url.empty?
+        url
+      end
+
+      private def require_ref(ref)
+        return { error: "ref is required for this act kind (snapshot first to get refs)" } if ref.nil? || ref.to_s.empty?
+        ref.to_s
+      end
+
+      private def resolve_target_id(opts)
+        tid = opts[:target_id] || opts["target_id"]
+        if tid && !tid.to_s.empty?
+          return tid.to_s
+        end
+        # Auto-select the first available page
+        result = mcp_call("list_pages")
+        pages  = extract_pages(result)
+        page   = pages.find { |p| p[:selected] } || pages.first
+        return { error: "No open tabs found. Use action=open first." } unless page
+        page[:id].to_s
+      end
+
+      # -----------------------------------------------------------------------
+      # Output helpers
+      # -----------------------------------------------------------------------
+
       private def compress_snapshot(output)
         return output if output.empty?
 
@@ -1078,38 +896,26 @@ module Clacky
         end
 
         removed = orig - filtered.size
-        filtered << "\n[snapshot compressed: #{removed} /url, /placeholder, empty-img lines removed]\n" if removed > 0
+        if removed > 0
+          filtered << "\n[snapshot compressed: #{removed} lines removed]\n"
+        end
         filtered.join
       end
 
-      private def command_name_for_temp(command)
-        first_word = (command || "").strip.split(/\s+/).first
-        File.basename(first_word.to_s, ".*")
-      end
+      private def truncate_output(output, max_chars)
+        return output if output.length <= max_chars
 
-      private def truncate_and_save(output, max_chars, _label, command_name)
-        return { content: "", temp_file: nil } if output.empty?
-        return { content: output, temp_file: nil } if output.length <= max_chars
-
-        lines = output.lines
-        return { content: output, temp_file: nil } if lines.length <= 2
-
-        safe_name = command_name.gsub(/[^\w\-.]/, "_")[0...50]
-        temp_dir  = Dir.mktmpdir
-        temp_file = File.join(temp_dir, "browser_#{safe_name}_#{Time.now.strftime("%Y%m%d_%H%M%S")}.output")
-        File.write(temp_file, output)
-
-        available  = max_chars - 200
+        lines     = output.lines
+        available = max_chars - 150
         first_part = []
-        accumulated = 0
+        acc = 0
         lines.each do |line|
-          break if accumulated + line.length > available
+          break if acc + line.length > available
           first_part << line
-          accumulated += line.length
+          acc += line.length
         end
-
-        notice = "\n\n... [Output truncated: showing #{first_part.size} of #{lines.size} lines, full: #{temp_file} (use grep to search)] ...\n"
-        { content: first_part.join + notice, temp_file: temp_file }
+        notice = "\n... [truncated: #{first_part.size}/#{lines.size} lines shown] ..."
+        first_part.join + notice
       end
     end
   end
