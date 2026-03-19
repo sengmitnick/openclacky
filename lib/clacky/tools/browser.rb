@@ -508,19 +508,19 @@ module Clacky
         # Resolve connection flags depending on profile selection.
         # user   → try CDP to user's real browser; fall back to sandbox if unreachable.
         # sandbox (default) → agent-browser's own isolated Chromium session.
-        cdp_port = nil
+        cdp_ws_url   = nil
         browser_info = nil
 
         if use_user_profile
           browser_info = ChromiumDetector.detect
-          cdp_port     = resolve_user_browser_cdp_port(browser_info)
+          cdp_ws_url   = resolve_user_browser_cdp_port(browser_info)
         end
 
         # Build the agent-browser subcommand string from the structured action.
-        ab_command = build_action_command(action, opts, real_browser: cdp_port)
+        ab_command = build_action_command(action, opts, real_browser: cdp_ws_url)
 
-        if cdp_port
-          full_command = build_command(ab_command, cdp_port: cdp_port)
+        if cdp_ws_url
+          full_command = build_command(ab_command, cdp_ws_url: cdp_ws_url)
           result = Shell.new.execute(command: full_command,
                                      hard_timeout: BROWSER_COMMAND_TIMEOUT,
                                      working_dir: working_dir)
@@ -831,101 +831,67 @@ module Clacky
       #           The new instance starts headless in the background. The agent's
       #           commands run inside it, isolated from the user's real profile.
       #
-      # Returns nil when CDP cannot be established (unsupported platform, browser
-      # binary not found, or spawn timed out).
+      # Returns a CDP connection string for the user's default Chromium browser, or nil.
+      # The returned value is either a full WebSocket URL ("ws://127.0.0.1:PORT/PATH")
+      # or nil when no connection can be established.
+      #
+      # Two-stage resolution:
+      #
+      # Stage 1 — Fast path: read DevToolsActivePort file (port + WS path) and verify
+      #            the WebSocket endpoint is reachable via TCP.
+      #
+      #            Chrome 144+ exposes a full WS URL in DevToolsActivePort:
+      #              line 1: port number
+      #              line 2: WebSocket path (e.g. /devtools/browser/UUID)
+      #
+      #            Crucially, Chrome 144+ returns HTTP 404 on /json/version (security
+      #            hardening) but the WebSocket endpoint itself IS reachable directly.
+      #            We build the ws:// URL from the file and hand it to agent-browser,
+      #            bypassing the broken /json/version check entirely.
+      #
+      # Stage 2 — No port file or stale port: spawn a fresh browser process pointing
+      #            at the real user-data-dir (cookies preserved). Used when the browser
+      #            is not running or has never had CDP enabled.
       private def resolve_user_browser_cdp_port(info = nil)
         info ||= ChromiumDetector.detect
         return nil unless info
 
-        # Stage 1: DevToolsActivePort file exists AND CDP HTTP is fully ready (200 OK).
-        port = read_dev_tools_port_once(info[:user_data_dir])
-        if port && cdp_port_alive?(port)
-          return port
-        end
+        # Stage 1: read DevToolsActivePort — both port and WS path.
+        ws_url = read_dev_tools_ws_url(info[:user_data_dir])
+        return ws_url if ws_url && cdp_port_tcp_reachable?(URI(ws_url).port)
 
-        # Stage 2: spawn a new browser instance with CDP enabled, reusing the
-        # user's real user-data-dir so login state and cookies are preserved.
-        spawn_debugging_browser(info[:kind], info[:user_data_dir])
+        # Stage 2: no port file or stale port — spawn a new browser process.
+        port = spawn_debugging_browser(info[:kind], info[:user_data_dir])
+        port ? read_dev_tools_ws_url(info[:user_data_dir]) : nil
       end
 
-      # Returns true if the CDP endpoint at the given port is fully ready —
-      # i.e. GET /json/version returns HTTP 200 with JSON content.
-      #
-      # Edge in approval-mode listens on TCP but returns HTTP 404 until the user
-      # clicks "Allow" in the consent dialog. TCP-only probes cannot distinguish
-      # between "ready" and "waiting for approval", so we use HTTP here.
-      private def cdp_port_alive?(port)
-        uri = URI("http://127.0.0.1:#{port}/json/version")
-        res = Net::HTTP.start(uri.host, uri.port, open_timeout: 1, read_timeout: 2) do |http|
-          http.get(uri.path)
-        end
-        res.is_a?(Net::HTTPOK) && !res.body.to_s.empty?
-      rescue StandardError
-        false
-      end
-
-
-      # Read DevToolsActivePort immediately — no waiting.
-      # Returns port Integer or nil.
-      private def read_dev_tools_port_once(user_data_dir)
+      # Read DevToolsActivePort and return a full ws:// URL, or nil.
+      # Chrome writes both the port (line 1) and the WS browser path (line 2).
+      # Using the full WS URL bypasses Chrome 144+'s HTTP 404 on /json/version.
+      private def read_dev_tools_ws_url(user_data_dir)
         port_file = File.join(user_data_dir, "DevToolsActivePort")
         return nil unless File.exist?(port_file)
 
-        content = File.read(port_file).strip
-        port    = content.lines.first&.strip
-        (port =~ /\A\d+\z/ && port.to_i > 0) ? port.to_i : nil
+        lines = File.read(port_file).strip.lines.map(&:strip).reject(&:empty?)
+        port  = lines[0]
+        path  = lines[1]
+
+        return nil unless port&.match?(/\A\d+\z/) && port.to_i > 0
+        return nil unless path&.start_with?("/")
+
+        "ws://127.0.0.1:#{port}#{path}"
       rescue StandardError
         nil
       end
 
-      # Poll for DevToolsActivePort up to `wait_secs` seconds.
-      private def read_dev_tools_port(user_data_dir, wait_secs)
-        deadline = Time.now + wait_secs
-        loop do
-          port = read_dev_tools_port_once(user_data_dir)
-          return port if port
-          break if Time.now >= deadline
-          sleep DEV_TOOLS_PORT_POLL_INTERVAL
-        end
-        nil
-      end
-
-      # Returns true if the browser's Local State indicates the user has enabled
-      # remote debugging via the inspect page (devtools.remote_debugging.user-enabled).
-      #
-      # When this pref is true, the browser starts the CDP server automatically
-      # on launch (approval-mode). When false, it does nothing until the user
-      # ticks the checkbox on the inspect page.
-      #
-      # Falls back to false if the file cannot be read or parsed — safer to
-      # assume setup is needed than to wait too short.
-      private def cdp_user_enabled?(user_data_dir)
-        local_state_path = File.join(user_data_dir, "Local State")
-        return false unless File.exist?(local_state_path)
-
-        data = JSON.parse(File.read(local_state_path))
-        data.dig("devtools", "remote_debugging", "user-enabled") == true
+      # Returns true if a TCP connection to the given port succeeds.
+      # Used to confirm the browser process is actually running and listening.
+      private def cdp_port_tcp_reachable?(port)
+        Socket.tcp("127.0.0.1", port, connect_timeout: 1) { true }
       rescue StandardError
         false
       end
 
-      # Open the browser's inspect page to trigger the "Allow remote debugging?"
-      # consent dialog (Chrome/Edge 144+ feature).
-      # MacOS application names for each browser kind (used with `open -a`)
-      MAC_BROWSER_APP_NAMES = {
-        chrome:   "Google Chrome",
-        edge:     "Microsoft Edge",
-        brave:    "Brave Browser",
-        chromium: "Chromium",
-      }.freeze
-
-      # Internal URL schemes for the DevTools inspect page
-      CDP_INSPECT_SCHEMES = {
-        chrome:   "chrome",
-        edge:     "edge",
-        brave:    "brave",
-        chromium: "chrome",
-      }.freeze
 
       # macOS binary paths for each browser kind — used to launch a new debugging
       # instance with --remote-debugging-port=0 directly (not via `open -a`, which
@@ -978,11 +944,12 @@ module Clacky
         )
         # Intentionally no Process.wait — browser must stay running.
 
-        # Poll DevToolsActivePort, then HTTP-verify CDP is truly ready.
+        # Poll DevToolsActivePort until the spawned browser writes both port + WS path.
         deadline = Time.now + DEV_TOOLS_PORT_WAIT_SECS_SHORT
         loop do
-          port = read_dev_tools_port_once(user_data_dir)
-          return port if port && cdp_port_alive?(port)
+          ws_url = read_dev_tools_ws_url(user_data_dir)
+          port   = ws_url && URI(ws_url).port
+          return port if port && cdp_port_tcp_reachable?(port)
           break if Time.now >= deadline
           sleep DEV_TOOLS_PORT_POLL_INTERVAL
         end
@@ -994,11 +961,12 @@ module Clacky
       # Command building
       # -----------------------------------------------------------------------
 
-      private def build_command(command, cdp_port: nil, session_name: nil, headed: true)
+      private def build_command(command, cdp_ws_url: nil, session_name: nil, headed: true)
         parts = [AGENT_BROWSER_BIN]
-        if cdp_port
-          # Connect to user's real browser via CDP — no session-name, no --headed flag
-          parts += ["--cdp", cdp_port.to_s]
+        if cdp_ws_url
+          # Connect to user's real browser via CDP WebSocket URL.
+          # Using the full ws:// URL bypasses Chrome 144+'s HTTP 404 on /json/version.
+          parts += ["--cdp", cdp_ws_url]
         else
           parts << "--headed" if headed
           parts += ["--session-name", Shellwords.escape(session_name)] if session_name
