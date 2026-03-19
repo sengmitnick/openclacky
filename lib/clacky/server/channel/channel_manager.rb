@@ -274,7 +274,9 @@ module Clacky
       def auto_create_session(event)
         key = channel_key(event)
         name = "channel-#{event[:platform]}-#{event[:user_id]}"
-        session_id = @session_builder.call(name: name, working_dir: Dir.home)
+        # Channel sessions are hidden from the UI session list — they run in the
+        # background and are managed through the IM platform, not the web UI.
+        session_id = @session_builder.call(name: name, working_dir: Dir.home, hidden: true)
         bind_key_to_session(key, session_id)
         Clacky::Logger.info("[ChannelManager] Auto-created session #{session_id[0, 8]} for #{key}")
         session_id
