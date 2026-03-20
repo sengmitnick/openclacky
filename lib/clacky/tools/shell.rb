@@ -5,6 +5,28 @@ require_relative "base"
 
 module Clacky
   module Tools
+    # A StringIO wrapper that scrubs invalid/undefined bytes to UTF-8 on every
+    # write.  Shell commands (via popen3) can emit bytes in any encoding
+    # (GBK, Latin-1, binary, …).  By sanitizing at the earliest possible point
+    # we guarantee that every downstream operation — regex matching, line
+    # splitting, JSON serialization — never sees invalid byte sequences.
+    class EncodingSafeBuffer
+      def initialize
+        @io = StringIO.new("".b)
+      end
+
+      def write(data)
+        return unless data && !data.empty?
+
+        safe = data.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
+        @io.write(safe)
+      end
+
+      def string
+        @io.string
+      end
+    end
+
     class Shell < Base
       self.tool_name = "shell"
       self.tool_description = "Execute shell commands in the terminal"
@@ -63,8 +85,8 @@ module Clacky
 
         soft_timeout, hard_timeout = determine_timeouts(command, soft_timeout, hard_timeout)
 
-        stdout_buffer = StringIO.new
-        stderr_buffer = StringIO.new
+        stdout_buffer = EncodingSafeBuffer.new
+        stderr_buffer = EncodingSafeBuffer.new
         soft_timeout_triggered = false
         process_pid = nil
         
