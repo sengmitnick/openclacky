@@ -380,7 +380,15 @@ module Clacky
         ensure
           # If interrupted or failed, roll back the speculative compression message
           # so it doesn't pollute future conversation turns.
-          @history.rollback_before(compression_message) unless compression_handled
+          unless compression_handled
+            @history.rollback_before(compression_message)
+            # Also restore compression_level since compress_messages_if_needed already incremented it.
+            # Failure to do so would cause the next call to start at level 2 instead of 1,
+            # and more importantly would re-trigger compression on the very next think() call
+            # (with the user's new message as the last entry), producing consecutive user messages
+            # that confuse the LLM into echoing compression instructions.
+            @compression_level -= 1
+          end
         end
         return nil
       end

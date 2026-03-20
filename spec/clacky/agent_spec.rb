@@ -555,6 +555,108 @@ RSpec.describe Clacky::Agent do
       expect(final_count).to be < initial_count
       expect(final_tokens).to be < initial_tokens
     end
+
+    # Regression tests for: "user types new input during compression → LLM echoes
+    # compression instructions instead of answering the new question"
+    #
+    # Root cause: when AgentInterrupted fires during the compression call_llm,
+    # the ensure block rolls back the compression_message from history (correct),
+    # but @compression_level had already been incremented by compress_messages_if_needed.
+    # On the very next think() triggered by the new task, compression fires again,
+    # appending COMPRESSION_PROMPT right after the user's new message. The LLM then
+    # sees two consecutive user messages and responds to the latter (compression prompt)
+    # instead of the actual user question.
+    context "when compression is interrupted by new user input" do
+      # Build a helper that fills history past the compression threshold
+      def fill_history_past_threshold(agent)
+        agent.history.append({ role: "system", content: "System prompt" })
+        100.times do |i|
+          long_content = "Conversation message #{i}. " * 80
+          agent.history.append({ role: "user", content: long_content })
+          agent.history.append({ role: "assistant", content: "Response #{i}: " + "Answer " * 80 })
+        end
+      end
+
+      it "restores @compression_level to its pre-compression value after interrupt" do
+        fill_history_past_threshold(compression_agent)
+
+        level_before = compression_agent.instance_variable_get(:@compression_level)
+
+        # Simulate AgentInterrupted firing during call_llm (compression never completes)
+        allow(client).to receive(:send_messages_with_tools)
+          .and_raise(Clacky::AgentInterrupted, "New input received")
+
+        # think() should propagate the interrupt (it only catches it in ensure)
+        expect { compression_agent.send(:think) }.to raise_error(Clacky::AgentInterrupted)
+
+        level_after = compression_agent.instance_variable_get(:@compression_level)
+        expect(level_after).to eq(level_before),
+          "@compression_level was #{level_before} before interrupted compression, " \
+          "expected it to be restored but got #{level_after}"
+      end
+
+      it "rolls back compression_message from history after interrupt" do
+        fill_history_past_threshold(compression_agent)
+
+        messages_before = compression_agent.history.to_a.dup
+        count_before = compression_agent.history.size
+
+        allow(client).to receive(:send_messages_with_tools)
+          .and_raise(Clacky::AgentInterrupted, "New input received")
+
+        expect { compression_agent.send(:think) }.to raise_error(Clacky::AgentInterrupted)
+
+        count_after = compression_agent.history.size
+        expect(count_after).to eq(count_before),
+          "History should be restored after interrupted compression, " \
+          "but went from #{count_before} to #{count_after} messages"
+
+        # The last message must not be the compression prompt
+        last_msg = compression_agent.history.to_a.last
+        expect(last_msg[:content]).not_to include("COMPRESSION MODE"),
+          "compression_message must be rolled back from history after interrupt"
+      end
+
+      it "does not send COMPRESSION_PROMPT as the last message when new task starts after interrupt" do
+        fill_history_past_threshold(compression_agent)
+
+        # Step 1: interrupt the compression mid-way
+        allow(client).to receive(:send_messages_with_tools)
+          .and_raise(Clacky::AgentInterrupted, "New input received")
+        expect { compression_agent.send(:think) }.to raise_error(Clacky::AgentInterrupted)
+
+        # Step 2: simulate new task — append the user's new message (as run() would)
+        compression_agent.history.append({ role: "user", content: "New question from user" })
+
+        # Step 3: capture what messages the next think() would send to the LLM
+        messages_sent = nil
+        allow(client).to receive(:send_messages_with_tools) do |msgs, **_opts|
+          messages_sent = msgs
+          mock_api_response(content: "Here is my answer to your new question")
+        end
+
+        # think() will again detect the threshold and trigger compression,
+        # appending COMPRESSION_PROMPT after the new user message.
+        # After the fix, @compression_level is correctly restored, but more importantly
+        # we verify that the actual messages sent to LLM contain the user's new question
+        # as the effective last real instruction (not buried under COMPRESSION_PROMPT).
+        compression_agent.send(:think)
+
+        expect(messages_sent).not_to be_nil
+
+        # The last message sent to the LLM must be the COMPRESSION_PROMPT (intended),
+        # but crucially the new user message must appear immediately before it — not
+        # swallowed or missing — so that if compression succeeds, context is preserved.
+        last_msg = messages_sent.last
+        second_last = messages_sent[-2]
+
+        expect(last_msg[:content]).to include("COMPRESSION MODE"),
+          "Expected COMPRESSION_PROMPT to be the final message sent to LLM during compression"
+        expect(second_last[:content]).to eq("New question from user"),
+          "Expected the user's new question to appear immediately before the COMPRESSION_PROMPT, " \
+          "but got: #{second_last[:content].to_s[0..100]}"
+      end
+    end
   end
 
   describe ".from_session" do
