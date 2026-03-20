@@ -15,7 +15,7 @@ require_relative "scheduler"
 require_relative "../brand_config"
 require_relative "channel"
 require_relative "../banner"
-require_relative "../plugin_loader"
+require_relative "../ui_extension_loader"
 require_relative "../utils/file_processor"
 
 module Clacky
@@ -74,20 +74,20 @@ module Clacky
       def respond_to_missing?(name, include_private = false) = true
     end
 
-    # PluginRouter — DSL used by plugin routes.rb files to register API routes.
+    # SkillUiRouter — DSL used by skill UI routes.rb files to register API routes.
     #
-    # Each plugin's routes.rb is evaluated via instance_eval on a PluginRouter instance.
-    # Registered routes are stored in the HttpServer's _plugin_routes table and matched
+    # Each skill's ui/routes.rb is evaluated via instance_eval on a SkillUiRouter instance.
+    # Registered routes are stored in the HttpServer's _skill_ui_routes table and matched
     # on every incoming request after the built-in routes fail to match.
     #
-    # Usage in plugin's routes.rb:
-    #   get("/api/plugins/my-plugin/items") { |req, res, _| ... }
-    #   post("/api/plugins/my-plugin/items") { |req, res, _| ... }
-    #   get(%r{^/api/plugins/my-plugin/items/([^/]+)$}) { |req, res, captures| id = captures[0]; ... }
+    # Usage in skill's ui/routes.rb:
+    #   get("/api/my-skill/items") { |req, res, _| ... }
+    #   post("/api/my-skill/items") { |req, res, _| ... }
+    #   get(%r{^/api/my-skill/items/([^/]+)$}) { |req, res, captures| id = captures[0]; ... }
     #
     # The handler block is instance_exec'd on the HttpServer, giving access to all
     # server helpers: json_response, parse_json_body, build_session, @registry, etc.
-    class PluginRouter
+    class SkillUiRouter
       def initialize(server)
         @server = server
       end
@@ -103,7 +103,7 @@ module Clacky
         # Wrap the block so it is always instance_exec'd on the HttpServer,
         # regardless of the lexical self where the block was defined.
         wrapped = proc { |req, res, captures| server.instance_exec(req, res, captures, &block) }
-        @server._plugin_routes << { method: method, pattern: pattern, handler: wrapped }
+        @server._skill_ui_routes << { method: method, pattern: pattern, handler: wrapped }
       end
     end
 
@@ -193,8 +193,8 @@ module Clacky
           channel_config:    Clacky::ChannelConfig.load
         )
         @skill_loader    = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.load)
-        # Load plugin-specific route handlers from each plugin's routes.rb (if present).
-        _load_plugin_routes
+        # Load skill UI route handlers from each skill's ui/routes.rb (if present).
+        _load_skill_ui_routes
       end
 
       def start
@@ -322,7 +322,7 @@ module Clacky
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
         when ["POST",   "/api/restart"]           then api_restart(req, res)
-        when ["GET",    "/api/plugins"]           then api_list_plugins(res)
+        when ["GET",    "/api/ui-extensions"]           then api_list_skill_uis(res)
         else
           if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
@@ -363,18 +363,18 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
             name = URI.decode_www_form_component(path.sub("/api/my-skills/", "").sub("/publish", ""))
             api_publish_my_skill(name, req, res)
-          # ── generic plugin asset serving ─────────────────────────────────
-          elsif method == "GET" && path.match?(%r{^/api/plugins/[^/]+/assets/[^/]+$})
-            # GET /api/plugins/:id/assets/:filename
-            # Serve a plugin asset file (sidebar.html, panel.html, plugin.js)
-            parts     = path.split("/")  # ["", "api", "plugins", id, "assets", filename]
-            plugin_id = URI.decode_www_form_component(parts[3])
-            filename  = URI.decode_www_form_component(parts[5])
-            api_plugin_asset(plugin_id, filename, res)
-          # ── plugin-registered routes ──────────────────────────────────────
-          # Each plugin may register custom routes via its routes.rb file.
+          # ── generic skill UI asset serving ───────────────────────────────
+          elsif method == "GET" && path.match?(%r{^/api/ui-extensions/[^/]+/assets/[^/]+$})
+            # GET /api/ui-extensions/:id/assets/:filename
+            # Serve a skill UI asset file (sidebar.html, panel.html, index.js)
+            parts    = path.split("/")  # ["", "api", "ui-extensions", id, "assets", filename]
+            skill_id = URI.decode_www_form_component(parts[3])
+            filename = URI.decode_www_form_component(parts[5])
+            api_skill_ui_asset(skill_id, filename, res)
+          # ── skill UI registered routes ────────────────────────────────────
+          # Each skill UI may register custom routes via its ui/routes.rb file.
           # Routes are matched in registration order; first match wins.
-          elsif (handler = _match_plugin_route(method, path))
+          elsif (handler = _match_skill_ui_route(method, path))
             handler.call(req, res)
           else
             not_found(res)
@@ -664,70 +664,75 @@ module Clacky
       end
 
       # GET /api/brand
-      # ── Plugin API ────────────────────────────────────────────────────────────
+      # ── Skill UI Extension API ────────────────────────────────────────────────
 
-      # GET /api/plugins
-      # Returns all installed plugins from ~/.clacky/plugins/.
-      # When no plugins are installed, returns an empty array — UI shows nothing.
-      def api_list_plugins(res)
-        loader  = Clacky::PluginLoader.new
-        plugins = loader.load_all.map do |p|
+      # GET /api/ui-extensions
+      # Returns all UI extensions found in ~/.clacky/skills/*/ui/.
+      # Skills without a ui/ subdirectory are skipped — only skills that ship
+      # a manifest.yml inside ui/ are returned.
+      # Empty array if none found.
+      def api_list_skill_uis(res)
+        loader       = Clacky::UiExtensionLoader.new
+        skill_uis    = loader.load_all.map do |p|
           # Strip internal :dir key — not needed by frontend
           p.reject { |k, _| k == :dir }
         end
-        json_response(res, 200, { plugins: plugins })
+        json_response(res, 200, { ui_extensions: skill_uis })
       end
 
-      # ── Generic plugin route registry ────────────────────────────────────────
+      # ── Skill UI route registry ───────────────────────────────────────────────
       #
-      # Plugins register their own API routes by providing a routes.rb file.
-      # On server boot, http_server.rb loads each plugin's routes.rb and calls
-      # its `register(router)` method, where `router` is a PluginRouter instance.
+      # Skills that ship a UI extension can register custom API routes via a
+      # `routes.rb` file inside their ui/ subdirectory:
+      #   ~/.clacky/skills/<skill-name>/ui/routes.rb
+      #
+      # On server boot, http_server.rb loads each skill's ui/routes.rb using
+      # the SkillUiRouter DSL.
       #
       # routes.rb API:
-      #   router.get(pattern)  { |req, res, captures| ... }
-      #   router.post(pattern) { |req, res, captures| ... }
-      #   router.delete(pattern) { |req, res, captures| ... }
+      #   get(pattern)    { |req, res, captures| ... }
+      #   post(pattern)   { |req, res, captures| ... }
+      #   delete(pattern) { |req, res, captures| ... }
       #
       # Pattern can be a String (exact) or Regexp (with captures passed to block).
       # The handler block runs in the context of the HttpServer instance, giving
       # access to all server helpers (json_response, build_session, @registry, etc.).
       #
-      # Example (in coding-agent/routes.rb):
-      #   router.get("/api/plugins/coding-agent/projects") { |req, res, _| ... }
+      # Example (in coding-agent/ui/routes.rb):
+      #   get("/api/coding-agent/projects") { |req, res, _| ... }
 
-      # Registered plugin route table: [{ method:, pattern:, handler: }]
-      # Must be public so PluginRouter can call @server._plugin_routes from outside.
-      public def _plugin_routes
-        @_plugin_routes ||= []
+      # Registered skill UI route table: [{ method:, pattern:, handler: }]
+      # Must be public so SkillUiRouter can call @server._skill_ui_routes from outside.
+      public def _skill_ui_routes
+        @_skill_ui_routes ||= []
       end
 
-      # Called once on boot to load all plugin routes.rb files.
-      private def _load_plugin_routes
-        loader = Clacky::PluginLoader.new
-        loader.load_all.each do |plugin|
-          routes_path = File.join(plugin[:dir], "routes.rb")
+      # Called once on boot to load all ui/routes.rb files from skill UI extensions.
+      private def _load_skill_ui_routes
+        loader = Clacky::UiExtensionLoader.new
+        loader.load_all.each do |ext|
+          routes_path = File.join(ext[:dir], "routes.rb")
           next unless File.exist?(routes_path)
 
-          router = PluginRouter.new(self)
+          router = SkillUiRouter.new(self)
           begin
             # Evaluate routes.rb with router as self, so DSL methods (get, post,
-            # delete, etc.) are called directly on the PluginRouter instance.
+            # delete, etc.) are called directly on the SkillUiRouter instance.
             # Handler blocks are wrapped inside _register to be instance_exec'd
             # on HttpServer at dispatch time, giving them access to all server
             # helpers (json_response, build_session, @registry, etc.).
             routes_code = File.read(routes_path)
             router.instance_eval(routes_code, routes_path)
           rescue StandardError => e
-            warn "[PluginRouter] Failed to load routes for '#{plugin[:id]}': #{e.message}"
+            warn "[SkillUiRouter] Failed to load routes for '#{ext[:id]}': #{e.message}"
           end
         end
       end
 
-      # Match an incoming request against registered plugin routes.
+      # Match an incoming request against registered skill UI routes.
       # Returns the handler Proc if matched, nil otherwise.
-      private def _match_plugin_route(method, path)
-        _plugin_routes.each do |route|
+      private def _match_skill_ui_route(method, path)
+        _skill_ui_routes.each do |route|
           next unless route[:method] == method
 
           captures = case route[:pattern]
@@ -736,25 +741,25 @@ module Clacky
                        m = path.match(route[:pattern])
                        m ? m.captures : nil
                      end
-          return ->( req, res) { route[:handler].call(req, res, captures) } if captures
+          return ->(req, res) { route[:handler].call(req, res, captures) } if captures
         end
         nil
       end
 
-      # GET /api/plugins/:id/assets/:filename
-      # Serve a plugin asset file (sidebar.html, panel.html, plugin.js).
-      # Only .html and .js files are allowed for security.
-      PLUGIN_ASSET_ALLOWED = %w[sidebar.html panel.html plugin.js].freeze
+      # GET /api/ui-extensions/:id/assets/:filename
+      # Serve a UI extension asset file from ~/.clacky/skills/:id/ui/:filename
+      # (sidebar.html, panel.html, index.js). Only those files are allowed for security.
+      SKILL_UI_ASSET_ALLOWED = %w[sidebar.html panel.html index.js].freeze
 
-      private def api_plugin_asset(plugin_id, filename, res)
-        unless PLUGIN_ASSET_ALLOWED.include?(filename)
+      private def api_skill_ui_asset(skill_id, filename, res)
+        unless SKILL_UI_ASSET_ALLOWED.include?(filename)
           res.status = 403
           res.body   = "Forbidden"
           return
         end
 
-        loader  = Clacky::PluginLoader.new
-        content = loader.read_asset(plugin_id, filename)
+        loader  = Clacky::UiExtensionLoader.new
+        content = loader.read_asset(skill_id, filename)
 
         if content.nil?
           not_found(res)
@@ -763,10 +768,10 @@ module Clacky
 
         content_type = filename.end_with?(".js") ? "application/javascript; charset=utf-8" \
                                                   : "text/html; charset=utf-8"
-        res.status          = 200
-        res["Content-Type"] = content_type
+        res.status           = 200
+        res["Content-Type"]  = content_type
         res["Cache-Control"] = "no-store"
-        res.body            = content
+        res.body             = content
       end
 
       # Returns brand metadata consumed by the WebUI on boot
@@ -1798,7 +1803,9 @@ module Clacky
       # Broadcast a session_update event to all clients so they can patch their
       # local session list without needing a full session_list refresh.
       def broadcast_session_update(session_id)
-        session = @registry.list.find { |s| s[:id] == session_id }
+        # Use registry.summary (looks up by id directly, includes all sessions) instead
+        # of registry.list.find (which previously excluded hidden sessions and did an O(n) scan).
+        session = @registry.summary(session_id)
         return unless session
 
         broadcast_all(type: "session_update", session: session)
@@ -1818,8 +1825,10 @@ module Clacky
       # @param working_dir [String] working directory for the agent
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
-      # @param hidden [Boolean] when true, the session is excluded from the UI session list
-      #   (used for channel/IM sessions that run in the background)
+      # @param hidden [Boolean] when true, the session is excluded from the UI session list.
+      #   Intended for Skill UI plugin sessions that run background sub-tasks without
+      #   appearing in the user's conversation list. IM channel sessions (Feishu, WeCom)
+      #   should NOT use hidden: true — they should be visible to the user.
       def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", hidden: false)
         session_id = Clacky::SessionManager.generate_id
         @registry.create(session_id: session_id, hidden: hidden)

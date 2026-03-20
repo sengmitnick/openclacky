@@ -22,7 +22,11 @@ module Clacky
       # Create a new session entry and return its id.
       # session_id must come from the caller (use SessionManager.generate_id).
       # agent/ui/thread are set later via with_session once they are constructed.
-      # Pass hidden: true for system/channel sessions that should not appear in the UI list.
+      # Pass hidden: true for Skill UI plugin sessions that should not appear in
+      # the user-facing session list (e.g. a background session used internally by
+      # a skill to run sub-tasks without polluting the conversation list).
+      # IM channel sessions (Feishu, WeCom) are NOT hidden — they should be visible
+      # in the UI so users can view history and continue the conversation in the browser.
       def create(session_id:, hidden: false)
         raise ArgumentError, "session_id is required" if session_id.nil? || session_id.empty?
 
@@ -31,7 +35,7 @@ module Clacky
           status:               :idle,   # :idle | :running | :error
           error:                nil,
           updated_at:           Time.now,
-          hidden:               hidden,  # true = exclude from UI session list (e.g. channel sessions)
+          hidden:               hidden,  # true = exclude from UI session list (Skill UI plugin use only)
           agent:                nil,
           ui:                   nil,
           thread:               nil,
@@ -75,9 +79,22 @@ module Clacky
         end
       end
 
-      # Return a lightweight summary for a single session (including hidden ones).
-      # Used by plugins that manage their own hidden sessions and need to return
-      # session metadata to the frontend without going through the public list.
+      # Return all session ids (including hidden ones) whose raw session hash
+      # satisfies the given block. Used internally by ChannelManager to locate
+      # channel-bound sessions that are hidden from the UI list.
+      # @yieldparam session [Hash] raw session hash (not dup'd — read only inside block)
+      # @return [Array<String>] matching session ids
+      def find_ids(&block)
+        @mutex.synchronize do
+          @sessions.each_with_object([]) do |(id, session), ids|
+            ids << id if block.call(session)
+          end
+        end
+      end
+
+      # Return a lightweight summary for a single session by id (includes hidden sessions).
+      # Used by broadcast_session_update and Skill UI plugins to fetch session metadata
+      # directly by id without going through the public list.
       # Returns nil if the session does not exist.
       def summary(session_id)
         @mutex.synchronize do

@@ -227,9 +227,10 @@ module Clacky
           adapter.send_text(chat_id, "Task interrupted.")
 
         when "/unbind"
+          # find_ids searches all sessions including hidden channel sessions
           unbound = false
-          @registry.list.each do |summary|
-            @registry.with_session(summary[:id]) do |s|
+          @registry.find_ids { |s| s[:channel_keys]&.include?(key) }.each do |sid|
+            @registry.with_session(sid) do |s|
               unbound = true if s[:channel_keys]&.delete(key)
             end
           end
@@ -260,12 +261,11 @@ module Clacky
 
       def resolve_session(event)
         key = channel_key(event)
-        @registry.list.each do |summary|
-          found = nil
-          @registry.with_session(summary[:id]) { |s| found = s[:channel_keys]&.include?(key) }
-          return summary[:id] if found
-        end
-        nil
+        # Use find_ids to search ALL sessions (including hidden channel sessions).
+        # Previously used @registry.list which silently excludes hidden sessions,
+        # causing a new session to be auto-created on every message.
+        ids = @registry.find_ids { |s| s[:channel_keys]&.include?(key) }
+        ids.first
       rescue StandardError => e
         Clacky::Logger.error("[ChannelManager] Session resolve failed: #{e.message}")
         nil
@@ -274,17 +274,20 @@ module Clacky
       def auto_create_session(event)
         key = channel_key(event)
         name = "channel-#{event[:platform]}-#{event[:user_id]}"
-        # Channel sessions are hidden from the UI session list — they run in the
-        # background and are managed through the IM platform, not the web UI.
-        session_id = @session_builder.call(name: name, working_dir: Dir.home, hidden: true)
+        # Channel sessions are visible in the WebUI session list so users can
+        # view history and interact via the browser too. They run unattended
+        # (auto_approve) because no human is present to confirm tool calls.
+        session_id = @session_builder.call(name: name, working_dir: Dir.home,
+                                           hidden: false, permission_mode: :auto_approve)
         bind_key_to_session(key, session_id)
         Clacky::Logger.info("[ChannelManager] Auto-created session #{session_id[0, 8]} for #{key}")
         session_id
       end
 
       def bind_key_to_session(key, session_id)
-        @registry.list.each do |summary|
-          @registry.with_session(summary[:id]) { |s| s[:channel_keys]&.delete(key) }
+        # Remove the key from any session that currently holds it (including hidden ones).
+        @registry.find_ids { |s| s[:channel_keys]&.include?(key) }.each do |sid|
+          @registry.with_session(sid) { |s| s[:channel_keys]&.delete(key) }
         end
         @registry.with_session(session_id) do |s|
           s[:channel_keys] ||= Set.new
