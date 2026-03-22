@@ -931,6 +931,13 @@ module Clacky
           {
             bot_id: raw["bot_id"] || ""
           }
+        when :weixin
+          {
+            base_url:      raw["base_url"] || Clacky::Channel::Adapters::Weixin::ApiClient::DEFAULT_BASE_URL,
+            allowed_users: raw["allowed_users"] || [],
+            # Indicate whether a token is present (never expose the token itself)
+            has_token:     !raw["token"].to_s.strip.empty?
+          }
         else
           {}
         end

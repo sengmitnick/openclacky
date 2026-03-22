@@ -3934,6 +3934,11 @@ body.setup-mode[data-theme="dark"] {
   color: #fff;
 }
 
+.channel-logo-weixin {
+  background: linear-gradient(135deg, #2dc100, #1aad19);
+  color: #fff;
+}
+
 .channel-card-name {
   font-size: 15px;
   font-weight: 600;

@@ -103,6 +103,12 @@ module Clacky
           bot_id: raw["bot_id"],
           secret: raw["secret"]
         }.compact
+      when :weixin
+        {
+          token:         raw["token"],
+          base_url:      raw["base_url"],
+          allowed_users: raw["allowed_users"]
+        }.compact
       else
         # Unknown platform — pass all non-meta keys as symbol-keyed hash
         raw.reject { |k, _| k == "enabled" }

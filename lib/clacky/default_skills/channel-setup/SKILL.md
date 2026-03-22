@@ -1,9 +1,9 @@
 ---
 name: channel-setup
 description: |
-  Configure IM platform channels (Feishu, WeCom) for open-clacky.
+  Configure IM platform channels (Feishu, WeCom, Weixin) for open-clacky.
   Uses browser automation for navigation; guides the user to paste credentials and perform UI steps.
-  Trigger on: "channel setup", "setup feishu", "setup wecom", "channel config",
+  Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "channel config",
   "channel status", "channel enable", "channel disable", "channel reconfigure", "channel doctor".
   Subcommands: setup, status, enable <platform>, disable <platform>, reconfigure, doctor.
 argument-hint: "setup | status | enable <platform> | disable <platform> | reconfigure | doctor"
@@ -27,10 +27,10 @@ Configure IM platform channels for open-clacky. Config is stored at `~/.clacky/c
 
 | User says | Subcommand |
 |---|---|
-| `channel setup`, `setup feishu`, `setup wecom` | setup |
+| `channel setup`, `setup feishu`, `setup wecom`, `setup weixin`, `setup wechat` | setup |
 | `channel status` | status |
-| `channel enable feishu/wecom` | enable |
-| `channel disable feishu/wecom` | disable |
+| `channel enable feishu/wecom/weixin` | enable |
+| `channel disable feishu/wecom/weixin` | disable |
 | `channel reconfigure` | reconfigure |
 | `channel doctor` | doctor |
 
@@ -46,8 +46,11 @@ Channel Status
 Platform   Enabled   Details
 feishu     ✅ yes    app_id: cli_xxx...  domain: feishu.cn
 wecom      ❌ no     (not configured)
+weixin     ✅ yes    2 account(s) logged in
 ─────────────────────────────────────────────────────
 ```
+
+For Weixin, show `has_token: true/false` from the channels.yml entry (token is never displayed).
 
 If the file doesn't exist: "No channels configured yet. Run `/channel-setup setup` to get started."
 
@@ -60,6 +63,7 @@ Ask:
 >
 > 1. Feishu
 > 2. WeCom (Enterprise WeChat)
+> 3. Weixin (Personal WeChat via iLink QR login)
 
 ---
 
@@ -187,6 +191,68 @@ On success: "✅ WeCom channel configured. WeCom client → Contacts → Smart B
 
 ---
 
+### Weixin setup (Personal WeChat via iLink QR login)
+
+Weixin uses a QR code login — no app_id/app_secret needed. The token from the QR scan is saved directly in `channels.yml`.
+
+#### Step 1 — Find the setup script
+
+```bash
+WEIXIN_SETUP=$(ruby -e "puts Gem.find_files('clacky/default_skills/channel-setup/weixin_setup.rb').first" 2>/dev/null)
+[ -z "$WEIXIN_SETUP" ] && WEIXIN_SETUP=$(find ~/.gem /usr/local/lib -name "weixin_setup.rb" 2>/dev/null | head -1)
+echo "Script: $WEIXIN_SETUP"
+```
+
+If not found, fail with: "Could not find weixin_setup.rb. Please reinstall the clacky gem."
+
+#### Step 2 — Fetch QR code and open in browser
+
+Run the script in `--fetch-qr` mode to get the QR URL without blocking:
+
+```bash
+QR_JSON=$(CLACKY_SERVER_HOST=127.0.0.1 CLACKY_SERVER_PORT=7070 ruby "$WEIXIN_SETUP" --fetch-qr 2>/dev/null)
+echo "$QR_JSON"
+```
+
+Parse the JSON output:
+- `qrcode_url` — the URL to open in browser (this IS the QR code content)
+- `qrcode_id`  — the session ID needed for polling
+
+If the output contains `"error"`, show it and stop.
+
+Tell the user:
+> Opening the WeChat QR code in your browser. Please scan it with WeChat, then confirm in the app.
+
+**Open the QR code page in browser** — build a local URL and navigate to it:
+
+```
+http://127.0.0.1:7070/weixin-qr.html?url=<URL-encoded qrcode_url>
+```
+
+Use the browser tool to open this URL. The page renders a proper scannable QR code image using qrcode.js.
+Do NOT open the raw `qrcode_url` directly — that page shows "请使用微信扫码打开" with no actual QR image.
+
+#### Step 3 — Wait for scan and save credentials
+
+Once the browser shows the QR page, immediately run the polling script in the background:
+
+```bash
+CLACKY_SERVER_HOST=127.0.0.1 CLACKY_SERVER_PORT=7070 ruby "$WEIXIN_SETUP" --qrcode-id "$QRCODE_ID"
+```
+
+Where `$QRCODE_ID` is the `qrcode_id` from Step 2's JSON output.
+
+This command blocks until the user scans and confirms in WeChat (up to 5 minutes), then automatically saves the token via `POST /api/channels/weixin`.
+
+Tell the user while waiting:
+> Waiting for you to scan the QR code and confirm in WeChat... (this may take a moment)
+
+**If exit code is 0:** "✅ Weixin channel configured! You can now message your bot on WeChat."
+
+**If exit code is non-0 or times out:** Show the error and offer to retry from Step 2.
+
+---
+
 ## `enable`
 
 Read `~/.clacky/channels.yml`, set `channels.<platform>.enabled: true`, write back.
@@ -223,8 +289,10 @@ Check each item, report ✅ / ❌ with remediation:
 2. **Required keys** — for each enabled platform:
    - Feishu: `app_id`, `app_secret` present and non-empty
    - WeCom: `bot_id`, `secret` present and non-empty
+   - Weixin: `token` present and non-empty in `channels.yml`
 3. **Feishu credentials** (if enabled) — run the token API call, check `code=0`.
-4. **WeCom credentials** (if enabled) — search today's log:
+4. **Weixin token** (if enabled) — call `GET /api/channels` and check `has_token: true` for the weixin entry.
+5. **WeCom credentials** (if enabled) — search today's log:
    ```bash
    grep -iE "wecom adapter loop started|WeCom authentication failed|WeCom WS error response|WecomAdapter" \
      ~/.clacky/logger/clacky-$(date +%Y-%m-%d).log
