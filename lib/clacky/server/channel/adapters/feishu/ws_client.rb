@@ -16,6 +16,7 @@ module Clacky
         # method=0 → control (ping/pong/handshake), method=1 → data (event)
         class WSClient
           RECONNECT_DELAY = 5 # seconds
+          DEFAULT_DOMAIN = "https://open.feishu.cn"
 
           def initialize(app_id:, app_secret:, domain: DEFAULT_DOMAIN)
             @app_id = app_id

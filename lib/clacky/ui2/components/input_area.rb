@@ -5,6 +5,7 @@ require "tempfile"
 require_relative "../theme_manager"
 require_relative "../line_editor"
 require_relative "command_suggestions"
+require_relative "../../utils/encoding"
 
 module Clacky
   module UI2
@@ -291,7 +292,9 @@ module Clacky
           @files.each_with_index do |f, idx|
             move_cursor(current_row, 0)
             filename = f[:name] || f["name"] || "file"
-            content = @pastel.dim("[File #{idx + 1}] #{filename} (Ctrl+D to delete)")
+            size     = f[:size] || f["size"]
+            size_str = size ? " #{format_filesize(size)}" : ""
+            content = @pastel.dim("[File #{idx + 1}] #{filename}#{size_str} (Ctrl+D to delete)")
             print_with_padding(content)
             current_row += 1
           end
@@ -880,7 +883,8 @@ module Clacky
           if pasted[:type] == :image
             path = pasted[:path]
             mime_type = pasted[:mime_type] || "image/png"
-            @files << { name: File.basename(path), mime_type: mime_type, path: path }
+            size = File.exist?(path) ? File.size(path) : 0
+            @files << { name: File.basename(path), mime_type: mime_type, path: path, size: size }
             clear_tips
           else
             insert_text(pasted[:text])
@@ -1011,8 +1015,7 @@ module Clacky
           end
 
           text = `pbpaste 2>/dev/null`.to_s
-          text.force_encoding('UTF-8')
-          text = text.encode('UTF-8', invalid: :replace, undef: :replace)
+          text = Clacky::Utils::Encoding.to_utf8(text)
           { type: :text, text: text }
         rescue => e
           { type: :text, text: "" }
@@ -1021,13 +1024,11 @@ module Clacky
         def paste_from_clipboard_linux
           if system("which xclip >/dev/null 2>&1")
             text = `xclip -selection clipboard -o 2>/dev/null`.to_s
-            text.force_encoding('UTF-8')
-            text = text.encode('UTF-8', invalid: :replace, undef: :replace)
+            text = Clacky::Utils::Encoding.to_utf8(text)
             { type: :text, text: text }
           elsif system("which xsel >/dev/null 2>&1")
             text = `xsel --clipboard --output 2>/dev/null`.to_s
-            text.force_encoding('UTF-8')
-            text = text.encode('UTF-8', invalid: :replace, undef: :replace)
+            text = Clacky::Utils::Encoding.to_utf8(text)
             { type: :text, text: text }
           else
             { type: :text, text: "" }

@@ -32,7 +32,12 @@ module Clacky
       def show_user_message(content, created_at: nil, files: [])
         ev = { type: "history_user_message", session_id: @session_id, content: content }
         ev[:created_at] = created_at if created_at
-        ev[:files] = files if files && !files.empty?
+        rendered = Array(files).filter_map do |f|
+          url  = f[:data_url] || f["data_url"]
+          name = f[:name]     || f["name"]
+          url || (name ? "pdf:#{name}" : nil)
+        end
+        ev[:images] = rendered unless rendered.empty?
         @events << ev
       end
 
@@ -178,9 +183,6 @@ module Clacky
         # Version cache: { latest: "x.y.z", checked_at: Time }
         @version_cache   = nil
         @version_mutex   = Mutex.new
-        # Version cache: { latest: "x.y.z", checked_at: Time }
-        @version_cache   = nil
-        @version_mutex   = Mutex.new
         @scheduler       = Scheduler.new(
           session_registry: @registry,
           session_builder:  method(:build_session)
@@ -192,6 +194,7 @@ module Clacky
           interrupt_session: method(:interrupt_session),
           channel_config:    Clacky::ChannelConfig.load
         )
+        @browser_manager = Clacky::BrowserManager.instance
         @skill_loader    = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.load)
         # Load skill UI route handlers from each skill's ui/routes.rb (if present).
         _load_skill_ui_routes
@@ -206,6 +209,14 @@ module Clacky
         pid_file = File.join(Dir.tmpdir, "clacky-server-#{@port}.pid")
         File.write(pid_file, Process.pid.to_s)
         at_exit { File.delete(pid_file) if File.exist?(pid_file) }
+
+        # Expose server address and brand name to all child processes (skill scripts, shell commands, etc.)
+        # so they can call back into the server without hardcoding the port,
+        # and use the correct product name without re-reading brand.yml.
+        ENV["CLACKY_SERVER_PORT"]  = @port.to_s
+        ENV["CLACKY_SERVER_HOST"]  = (@host == "0.0.0.0" ? "127.0.0.1" : @host)
+        product_name = Clacky::BrandConfig.load.product_name
+        ENV["CLACKY_PRODUCT_NAME"] = (product_name.nil? || product_name.strip.empty?) ? "OpenClacky" : product_name
 
         # Override WEBrick's built-in signal traps via StartCallback,
         # which fires after WEBrick sets its own INT/TERM handlers.
@@ -246,8 +257,8 @@ module Clacky
 
         server.mount_proc("/") do |req, res|
           if req.path == "/" || req.path == "/index.html"
-            brand_name = Clacky::BrandConfig.load.brand_name || "Clacky"
-            html = File.read(index_html_path).gsub("{{BRAND_NAME}}", brand_name)
+            product_name = Clacky::BrandConfig.load.product_name || "Clacky"
+            html = File.read(index_html_path).gsub("{{BRAND_NAME}}", product_name)
             res.status                = 200
             res["Content-Type"]       = "text/html; charset=utf-8"
             res["Cache-Control"]      = "no-store"
@@ -278,6 +289,9 @@ module Clacky
 
         # Start IM channel adapters (non-blocking — each platform runs in its own thread)
         @channel_manager.start
+
+        # Start browser MCP daemon if browser.yml is configured (non-blocking)
+        @browser_manager.start
 
         server.start
       end
@@ -310,6 +324,8 @@ module Clacky
         when ["POST",   "/api/config/test"]   then api_test_config(req, res)
         when ["GET",    "/api/providers"]     then api_list_providers(res)
         when ["GET",    "/api/onboard/status"]    then api_onboard_status(res)
+        when ["GET",    "/api/browser/status"]    then api_browser_status(res)
+        when ["POST",   "/api/browser/reload"]    then api_browser_reload(res)
         when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
         when ["POST",   "/api/onboard/skip-soul"] then api_onboard_skip_soul(req, res)
         when ["GET",    "/api/store/skills"]          then api_store_skills(res)
@@ -318,6 +334,7 @@ module Clacky
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         when ["GET",    "/api/channels"]          then api_list_channels(res)
+        when ["POST",   "/api/tool/browser"]      then api_tool_browser(req, res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
@@ -433,15 +450,27 @@ module Clacky
       # Phase "soul_setup" → key configured, but ~/.clacky/agents/SOUL.md missing
       # needs_onboard: false → fully set up
       def api_onboard_status(res)
-        soul_path = File.expand_path("~/.clacky/agents/SOUL.md")
-
         if !@agent_config.models_configured?
           json_response(res, 200, { needs_onboard: true, phase: "key_setup" })
-        elsif !File.exist?(soul_path)
-          json_response(res, 200, { needs_onboard: true, phase: "soul_setup" })
         else
           json_response(res, 200, { needs_onboard: false })
         end
+      end
+
+      # GET /api/browser/status
+      # Returns real daemon liveness from BrowserManager (not just yml read).
+      def api_browser_status(res)
+        json_response(res, 200, @browser_manager.status)
+      end
+
+      # POST /api/browser/reload
+      # Called by browser-setup skill after writing browser.yml.
+      # Hot-reloads the MCP daemon with the new configuration.
+      def api_browser_reload(res)
+        @browser_manager.reload
+        json_response(res, 200, { ok: true })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
       end
 
       # POST /api/onboard/complete
@@ -479,9 +508,9 @@ module Clacky
       # Response:
       #   { branded: false }                              → no brand, nothing to do
       #   { branded: true, needs_activation: true,
-      #     brand_name: "JohnAI" }                       → license key required
+      #     product_name: "JohnAI" }                     → license key required
       #   { branded: true, needs_activation: false,
-      #     brand_name: "JohnAI", warning: "..." }       → activated, possible warning
+      #     product_name: "JohnAI", warning: "..." }     → activated, possible warning
       def api_brand_status(res)
         brand = Clacky::BrandConfig.load
 
@@ -494,7 +523,7 @@ module Clacky
           json_response(res, 200, {
             branded:          true,
             needs_activation: true,
-            brand_name:       brand.brand_name,
+            product_name:     brand.product_name,
             test_mode:        @brand_test
           })
           return
@@ -502,20 +531,20 @@ module Clacky
 
         warning = nil
         if brand.expired?
-          warning = "Your #{brand.brand_name} license has expired. Please renew to continue."
+          warning = "Your #{brand.product_name} license has expired. Please renew to continue."
         elsif brand.grace_period_exceeded?
           warning = "License server unreachable for more than 3 days. Please check your connection."
         elsif brand.license_expires_at && !brand.expired?
           days_remaining = ((brand.license_expires_at - Time.now.utc) / 86_400).ceil
           if days_remaining <= 7
-            warning = "Your #{brand.brand_name} license expires in #{days_remaining} day#{"s" if days_remaining != 1}. Please renew soon."
+            warning = "Your #{brand.product_name} license expires in #{days_remaining} day#{"s" if days_remaining != 1}. Please renew soon."
           end
         end
 
         json_response(res, 200, {
           branded:          true,
           needs_activation: false,
-          brand_name:       brand.brand_name,
+          product_name:     brand.product_name,
           warning:          warning,
           test_mode:        @brand_test,
           user_licensed:    brand.user_licensed?,
@@ -543,9 +572,9 @@ module Clacky
           # skills are loadable from this point forward (e.g. after sync).
           @skill_loader = Clacky::SkillLoader.new(working_dir: nil, brand_config: brand)
           json_response(res, 200, {
-            ok:           true,
-            brand_name:   result[:brand_name] || brand.brand_name,
-            user_id:      result[:user_id] || brand.license_user_id,
+            ok:            true,
+            product_name:  result[:product_name] || brand.product_name,
+            user_id:       result[:user_id] || brand.license_user_id,
             user_licensed: brand.user_licensed?
           })
         else
@@ -599,10 +628,9 @@ module Clacky
         else
           # Remote API failed — fall back to locally installed skills so the user
           # can still see and use what they already have. Surface a soft warning.
-          local_skills = brand.installed_brand_skills.map do |slug, meta|
+          local_skills = brand.installed_brand_skills.map do |name, meta|
             {
-              "slug"              => slug,
-              "name"              => meta["name"] || slug,
+              "name"              => meta["name"] || name,
               # Use locally cached description so it renders correctly offline
               "description"       => meta["description"].to_s,
               "installed_version" => meta["version"],
@@ -617,7 +645,7 @@ module Clacky
         end
       end
 
-      # POST /api/brand/skills/:slug/install
+      # POST /api/brand/skills/:name/install
       # Downloads and installs (or updates) the given brand skill.
       # Body may optionally contain { skill_info: {...} } from the frontend cache;
       # otherwise we re-fetch to get the download_url.
@@ -641,7 +669,7 @@ module Clacky
           all_skills = fetch_result[:skills]
         end
 
-        skill_info = all_skills.find { |s| s["slug"] == slug }
+        skill_info = all_skills.find { |s| s["name"] == slug }
         unless skill_info
           json_response(res, 404, { ok: false, error: "Skill '#{slug}' not found in license" })
           return
@@ -655,7 +683,7 @@ module Clacky
           # Reload skills so the Agent can pick up the new skill immediately.
           # Re-create the loader with the current brand_config so brand skills are decryptable.
           @skill_loader = Clacky::SkillLoader.new(working_dir: nil, brand_config: brand)
-          json_response(res, 200, { ok: true, slug: result[:slug], version: result[:version] })
+          json_response(res, 200, { ok: true, name: result[:name], version: result[:version] })
         else
           json_response(res, 422, { ok: false, error: result[:error] })
         end
@@ -918,6 +946,28 @@ module Clacky
 
       # GET /api/channels
       # Returns current config and running status for all supported platforms.
+      # POST /api/tool/browser
+      # Executes a browser tool action via the shared BrowserManager daemon.
+      # Used by skill scripts (e.g. feishu_setup.rb) to reuse the server's
+      # existing Chrome connection without spawning a second MCP daemon.
+      #
+      # Request body: JSON with same params as the browser tool
+      #   { "action": "snapshot", "interactive": true, ... }
+      #
+      # Response: JSON result from the browser tool
+      def api_tool_browser(req, res)
+        params = parse_json_body(req)
+        action = params["action"]
+        return json_response(res, 400, { error: "action is required" }) if action.nil? || action.empty?
+
+        tool   = Clacky::Tools::Browser.new
+        result = tool.execute(**params.transform_keys(&:to_sym))
+
+        json_response(res, 200, result)
+      rescue StandardError => e
+        json_response(res, 500, { error: e.message })
+      end
+
       def api_list_channels(res)
         config   = Clacky::ChannelConfig.load
         running  = @channel_manager.running_platforms
@@ -947,18 +997,12 @@ module Clacky
           return
         end
 
-        ref = Clacky::Utils::FileProcessor.process(
+        saved = Clacky::Utils::FileProcessor.save(
           body:     upload[:data],
           filename: upload[:filename].to_s
         )
 
-        json_response(res, 200, {
-          ok:           true,
-          name:         ref.name,
-          type:         ref.type.to_s,
-          path:         ref.original_path,
-          preview_path: ref.preview_path
-        })
+        json_response(res, 200, { ok: true, name: saved[:name], path: saved[:path] })
       rescue => e
         json_response(res, 500, { ok: false, error: e.message })
       end
@@ -973,6 +1017,20 @@ module Clacky
 
         fields = body.transform_keys(&:to_sym).reject { |k, _| k == :platform }
         fields = fields.transform_values { |v| v.is_a?(String) ? v.strip : v }
+
+        # Validate credentials against live API before persisting.
+        # Merge with existing config so partial updates (e.g. allowed_users only) still validate correctly.
+        klass = Clacky::Channel::Adapters.find(platform)
+        if klass && klass.respond_to?(:test_connection)
+          existing = config.platform_config(platform) || {}
+          merged   = existing.merge(fields)
+          result   = klass.test_connection(merged)
+          unless result[:ok]
+            json_response(res, 422, { ok: false, error: result[:error] || "Credential validation failed" })
+            return
+          end
+        end
+
         config.set_platform(platform, **fields)
         config.save
 
@@ -1045,8 +1103,7 @@ module Clacky
         mock_skills = [
           {
             "id"          => 1,
-            "name"        => "Code Review Bot",
-            "slug"        => "code-review-bot",
+            "name"        => "code-review-bot",
             "description" => "Automated AI code review with inline suggestions.",
             "visibility"  => "private",
             "version"     => "1.2.0",
@@ -1061,8 +1118,7 @@ module Clacky
           },
           {
             "id"          => 2,
-            "name"        => "Deploy Assistant",
-            "slug"        => "deploy-assistant",
+            "name"        => "deploy-assistant",
             "description" => "One-command deployment for Rails / Node / Docker projects.",
             "visibility"  => "private",
             "version"     => "2.0.1",
@@ -1077,8 +1133,7 @@ module Clacky
           },
           {
             "id"          => 3,
-            "name"        => "Test Runner",
-            "slug"        => "test-runner",
+            "name"        => "test-runner",
             "description" => "Run your test suite and summarize failures with AI insights.",
             "visibility"  => "private",
             "version"     => "1.0.0",
@@ -1092,8 +1147,8 @@ module Clacky
             }
           }
         ].map do |skill|
-          slug  = skill["slug"]
-          local = installed[slug]
+          name     = skill["name"]
+          local    = installed[name]
           latest_v = (skill["latest_version"] || {})["version"]
           skill.merge(
             "installed_version" => local ? local["version"] : nil,
@@ -1219,14 +1274,18 @@ module Clacky
       # GET /api/skills — list all loaded skills with metadata
       def api_list_skills(res)
         @skill_loader.load_all  # refresh from disk on each request
-        skills = @skill_loader.all_skills.map do |skill|
+        skills = @skill_loader.all_skills.reject(&:brand_skill).map do |skill|
           source = @skill_loader.loaded_from[skill.identifier]
-          {
+          entry = {
             name:        skill.identifier,
             description: skill.context_description,
             source:      source,
-            enabled:     !skill.disabled?
+            enabled:     !skill.disabled?,
+            invalid:     skill.invalid?,
+            warnings:    skill.warnings
           }
+          entry[:invalid_reason] = skill.invalid_reason if skill.invalid?
+          entry
         end
         json_response(res, 200, { skills: skills })
       end
@@ -1693,6 +1752,11 @@ module Clacky
           broadcast(session_id, { type: "session_renamed", session_id: session_id, name: auto_name })
         end
 
+        # Broadcast user message through web_ui so channel subscribers (飞书/企微) receive it.
+        web_ui = nil
+        @registry.with_session(session_id) { |s| web_ui = s[:ui] }
+        web_ui&.show_user_message(content, source: :web)
+
         # File references are now handled inside agent.run — injected as a system_injected
         # message after the user message, so replay_history skips them automatically.
         run_agent_task(session_id, agent) { agent.run(content, files: files) }
@@ -1761,6 +1825,10 @@ module Clacky
           @registry.update(session_id, status: :error, error: e.message)
           broadcast_session_update(session_id)
           broadcast(session_id, { type: "error", session_id: session_id, message: e.message })
+          # Route error through web_ui so channel subscribers (飞书/企微) receive it too.
+          web_ui = nil
+          @registry.with_session(session_id) { |s| web_ui = s[:ui] }
+          web_ui&.show_error(e.message)
           save_session(session_id, agent, status: :error, error_message: e.message)
         end
         @registry.with_session(session_id) { |s| s[:thread] = thread }

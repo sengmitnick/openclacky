@@ -5,6 +5,7 @@ require "open3"
 require "timeout"
 require "tmpdir"
 require "shellwords"
+require "yaml"
 require_relative "base"
 
 module Clacky
@@ -38,13 +39,20 @@ module Clacky
         - tabs       → list open tabs
         - focus      → switch to a tab by targetId
         - close      → close current tab
-        - screenshot → capture screenshot. Ask user first (high token cost).
+        - screenshot → EXPENSIVE. Only use when user explicitly asks to "see" or "show" the page. NEVER call without ref= unless user asks for a visual. Use ref= to screenshot a single element (much cheaper).
         - status     → check if browser is running
 
         SNAPSHOT WORKFLOW — always snapshot first:
         - action="snapshot"                            → full accessibility tree
         - action="snapshot", interactive=true          → interactive elements only (recommended)
         - action="snapshot", interactive=true, compact=true → compact interactive
+
+        SCREENSHOT RULES — read before calling screenshot:
+        1. DEFAULT: use snapshot to understand the page. snapshot is FREE; screenshot costs ~30K tokens.
+        2. WITH ref=: screenshot a single element (e.g. ref="e5") — costs ~1-2K tokens. OK to use.
+        3. WITHOUT ref= (full page): ONLY if user explicitly says "show me", "screenshot", "what does it look like". NEVER call proactively.
+        4. If you want to check state / find elements / verify result → use snapshot, NOT screenshot.
+
 
         ACT KINDS: click, dblclick, type, fill, press, hover, drag, select, scroll, wait, evaluate, click_at
         - click:    ref="e1"
@@ -94,7 +102,7 @@ module Clacky
           },
           ref: {
             type: "string",
-            description: "act: element ref from snapshot (e.g. 'e1')."
+            description: "act: element ref from snapshot (e.g. 'e1'). screenshot: capture only this element (much cheaper than full-page)."
           },
           text: { type: "string", description: "act type/fill: text to enter." },
           key:  { type: "string", description: "act press: key (e.g. 'Enter')." },
@@ -167,6 +175,14 @@ module Clacky
       @@mcp_process = nil
       @@mcp_mutex   = Mutex.new
       @@mcp_call_id = 2  # 1 is reserved for the initialize handshake
+
+      # Class-level helper so BrowserManager can start the MCP daemon
+      # without needing a full Browser tool instance.
+      def self.build_mcp_command(user_data_dir: nil)
+        args = CHROME_MCP_BASE_ARGS.dup
+        args += ["--userDataDir", user_data_dir.to_s] if user_data_dir && !user_data_dir.to_s.empty?
+        ["npx", *args]
+      end
 
       def execute(action:, profile: nil, working_dir: nil, **opts)
         execute_user_browser(action, opts)
@@ -482,6 +498,57 @@ module Clacky
           pageId:   target_id.to_i,
           format:   format,
           fullPage: full_page
+        }
+        call_args[:quality] = quality.to_i if quality
+
+        result = mcp_call("take_screenshot", call_args)
+
+        # Extract base64 image from MCP response content
+        # MCP returns: { "content": [{ "type": "image", "mimeType": "image/jpeg", "data": "<base64>" }] }
+        image_block = Array(result["content"]).find { |b| b.is_a?(Hash) && b["type"] == "image" }
+
+        if image_block
+          mime_type = image_block["mimeType"] || "image/#{format}"
+          image_data = image_block["data"]
+          { action: "screenshot", success: true, profile: "user",
+            image_data: image_data, mime_type: mime_type,
+            output: "Screenshot captured." }
+        else
+          # Fallback: MCP saved to a temp file (image >= 2MB), extract path from text
+          text = extract_text_content(result)
+          { action: "screenshot", success: true, profile: "user",
+            output: text.empty? ? "Screenshot captured (large image saved to temp file)." : text }
+        end
+      end
+
+      BROWSER_CONFIG_PATH = File.expand_path("~/.clacky/browser.yml").freeze
+
+      # Shown when any browser action fails at runtime (Chrome closed, lost connection, etc.)
+      BROWSER_RECONNECT_HINT = <<~HINT.strip.freeze
+        Common causes for browser connection failure:
+        1. Chrome is not running — ask the user to open Chrome.
+        2. Remote Debugging is disabled — Chrome must be launched with --remote-debugging-port=9222.
+        3. The browser MCP daemon crashed or lost the connection — it may recover on the next action.
+
+        Inform the user of these possible causes and ask if they'd like to run a diagnosis.
+        If yes, invoke the browser-setup skill with subcommand "doctor" to diagnose and fix.
+      HINT
+
+      # Returns true if ~/.clacky/browser.yml exists and marks the browser as configured.
+      private def browser_configured?
+        return false unless File.exist?(BROWSER_CONFIG_PATH)
+        config = YAML.safe_load(File.read(BROWSER_CONFIG_PATH), permitted_classes: [Date, Time, Symbol])
+        config.is_a?(Hash) && config["configured"] == true
+      end
+
+      # Error returned when browser.yml is missing or not configured.
+      private def browser_not_configured_error
+        {
+          error: <<~MSG
+            The browser connection is not fully configured. This tool call has been rejected to protect user experience.
+
+            Ask the user if they'd like to configure the browser, then invoke the browser-setup skill to guide them through the setup. Retry this tool call after setup is complete.
+          MSG
         }
         call_args[:quality] = quality.to_i if quality
 

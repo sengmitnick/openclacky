@@ -4,6 +4,7 @@ require "net/http"
 require "uri"
 require "tmpdir"
 require "fileutils"
+require_relative "../utils/encoding"
 
 module Clacky
   module Tools
@@ -43,7 +44,7 @@ module Clacky
           response = fetch_url(uri)
 
           # Extract content and force UTF-8 encoding at the source
-          content = response.body.force_encoding('UTF-8').scrub('?')
+          content = Clacky::Utils::Encoding.to_utf8(response.body)
           content_type = response["content-type"] || ""
 
           # Parse HTML if it's an HTML page
@@ -118,7 +119,9 @@ module Clacky
             raise "Too many redirects" if redirects > max_redirects
 
             location = response["location"]
-            uri = URI.parse(location)
+            new_uri = URI.parse(location)
+            # Handle relative redirects by merging with the current URI
+            uri = new_uri.relative? ? uri.merge(new_uri) : new_uri
           else
             raise "HTTP error: #{response.code} #{response.message}"
           end

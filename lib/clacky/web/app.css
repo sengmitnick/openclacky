@@ -704,6 +704,12 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+.task-name-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 .task-name-text {
   font-weight: 600;
@@ -712,6 +718,10 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Mobile-only schedule shown inside name col — hidden on desktop */
+.task-name-sched {
+  display: none;
 }
 
 .task-col-schedule {
@@ -868,6 +878,24 @@ body {
 }
 
 /* Delete session button in chat header */
+/* Back button in chat header — hidden on desktop, shown on mobile via media query */
+.chat-back-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.chat-back-btn:hover { background: var(--color-bg-hover); }
+
 .btn-delete-session {
   margin-left: auto;
   display: flex;
@@ -1143,14 +1171,41 @@ body {
   object-fit: contain;
 }
 .msg-pdf-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
   background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border-primary);
-  font-size: 12px;
-  color: var(--color-text-secondary);
   margin-bottom: 4px;
+  max-width: 240px;
+  min-width: 100px;
+  vertical-align: middle;
+}
+.msg-pdf-badge-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.msg-pdf-badge-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.msg-pdf-badge-name {
+  font-size: 12px;
+  color: var(--color-text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msg-pdf-badge-type {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* ── Session info bar (above input area, mirrors CLI bottom status bar) ─── */
@@ -1278,39 +1333,52 @@ body {
 }
 .img-preview-remove:hover { background: var(--color-error); }
 
-/* PDF preview badge in image-preview-strip */
+/* File preview card in image-preview-strip (PDF, DOC, XLSX, etc.) */
 .pdf-preview-item {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  width: 64px;
+  gap: 8px;
   height: 64px;
-  border-radius: 6px;
+  padding: 0 28px 0 10px;
+  border-radius: 8px;
   border: 1px solid var(--color-border-primary);
   background: var(--color-bg-tertiary);
   flex-shrink: 0;
-  gap: 4px;
+  max-width: 180px;
+  min-width: 120px;
+  box-sizing: border-box;
 }
 .pdf-preview-icon {
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1;
+  flex-shrink: 0;
+}
+.pdf-preview-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .pdf-preview-name {
-  font-size: 9px;
-  color: var(--color-text-secondary);
-  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 56px;
-  padding: 0 2px;
+}
+.pdf-preview-type {
+  font-size: 9px;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 2px;
 }
 .pdf-preview-remove {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: 4px;
+  right: 4px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -2153,6 +2221,60 @@ body {
 }
 
 /* ── My Skills list ──────────────────────────────────────────────────────── */
+/* ── Skills Filter Bar ───────────────────────────────────────────────────── */
+.skills-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 0 6px;
+}
+
+.skills-filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.skills-filter-toggle input[type="checkbox"] {
+  display: none;
+}
+
+/* Mini toggle track — matches the skill-card toggle style */
+.skills-filter-toggle-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  background: var(--color-border-primary);
+  border-radius: 8px;
+  flex-shrink: 0;
+  transition: background 0.18s;
+}
+.skills-filter-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.18s;
+}
+.skills-filter-toggle input:checked ~ .skills-filter-toggle-track {
+  background: var(--color-accent, #6c63ff);
+}
+.skills-filter-toggle input:checked ~ .skills-filter-toggle-track::after {
+  transform: translateX(12px);
+}
+
+.skills-filter-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
 #skills-list {
   display: flex;
   flex-direction: column;
@@ -2230,6 +2352,64 @@ body {
   background: var(--color-success-bg);
   color: var(--color-success);
   border: 1px solid var(--color-success-border);
+}
+
+.skill-badge-invalid {
+  background: var(--color-error-bg, #fff0f0);
+  color: var(--color-error, #c0392b);
+  border: 1px solid var(--color-error-border, #f5c6c6);
+}
+
+/* ── Invalid / Warning notices ───────────────────────────────────────────── */
+.skill-card-invalid {
+  opacity: 0.7;
+  border-color: var(--color-error-border, #f5c6c6) !important;
+}
+.skill-notice {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 4px 10px;
+  border-top: 1px solid transparent;
+  border-radius: 0 0 6px 6px;
+}
+.skill-notice-error {
+  background: var(--color-error-bg, #fff0f0);
+  color: var(--color-error, #c0392b);
+  border-top-color: var(--color-error-border, #f5c6c6);
+}
+
+/* ── Warning icon (skill usable but has auto-corrected config issue) ──────── */
+.skill-warn-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--color-warning, #b7791f);
+  cursor: help;
+  flex-shrink: 0;
+}
+.skill-warn-icon::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  width: 260px;
+  background: var(--color-bg-elevated, #fff);
+  color: var(--color-text, #333);
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.skill-warn-icon:hover::after {
+  opacity: 1;
 }
 
 /* ── Toggle Switch ───────────────────────────────────────────────────────── */
@@ -2596,14 +2776,24 @@ body {
   white-space: nowrap;
 }
 .brand-skill-version.installed {
-  background: var(--color-success-bg);
-  color: var(--color-success);
-  border: 1px solid var(--color-success-border);
+  background: #1f3a5f;
+  color: #7eb8f7;
+  border: 1px solid #1d4070;
 }
 .brand-skill-version.latest {
-  background: #1f3a5f;
-  color: var(--color-accent-hover);
+  background: #1f4e9e;
+  color: #bfdbfe;
   border: 1px solid #1d4070;
+}
+[data-theme="light"] .brand-skill-version.installed {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+[data-theme="light"] .brand-skill-version.latest {
+  background: #1d4ed8;
+  color: #ffffff;
+  border: 1px solid #1e40af;
 }
 .brand-skill-update-arrow {
   color: var(--color-text-secondary);
@@ -2647,14 +2837,35 @@ body {
 }
 .btn-brand-update {
   background: #1f4e9e;
-  color: var(--color-accent-hover);
+  color: #bfdbfe;
   border: 1px solid #1d4070;
 }
-.btn-brand-update:hover { background: var(--color-accent-primary); }
+.btn-brand-update:hover { background: #1a3f85; }
+[data-theme="light"] .btn-brand-update {
+  background: #1d4ed8;
+  color: #ffffff;
+  border: 1px solid #1e40af;
+}
+[data-theme="light"] .btn-brand-update:hover { background: #1e40af; }
 .btn-brand-install:disabled,
 .btn-brand-update:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.btn-brand-use {
+  background: transparent;
+  border: 1px solid var(--color-success-border);
+  border-radius: 6px;
+  color: var(--color-success);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  transition: background .15s;
+  white-space: nowrap;
+}
+.btn-brand-use:hover {
+  background: var(--color-success-bg);
 }
 
 /* ── Skills sidebar section ──────────────────────────────────────────────── */
@@ -3737,13 +3948,22 @@ body.setup-mode[data-theme="dark"] {
 
 /* Status badge */
 .channel-status-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.badge-running,
+.badge-enabled,
+.badge-disabled {
+  display: inline-flex;
+  align-items: center;
   font-size: 12px;
   font-weight: 500;
   padding: 3px 10px;
   border-radius: 20px;
   white-space: nowrap;
 }
-
 .badge-running  { background: var(--color-success-bg);  color: var(--color-success); border: 1px solid var(--color-success-border); }
 .badge-enabled  { background: #1a2f4e; color: var(--color-accent-primary); border: 1px solid var(--color-accent-primary); }
 .badge-disabled { background: var(--color-bg-tertiary); color: var(--color-text-muted); border: 1px solid var(--color-border-primary); }
@@ -4234,4 +4454,313 @@ body.setup-mode[data-theme="dark"] {
 .ui-sidebar-entry.active {
   background-color: var(--color-bg-tertiary, #21262d);
   border-radius: 6px;
+}
+
+/* ── Mobile responsive (≤768px) ─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Sidebar becomes a fixed drawer on top of content */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    z-index: 200;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.18);
+    transition: transform 0.3s ease, background-color 0.3s ease;
+    transform: translateX(0);
+    margin-left: 0 !important;
+  }
+  #sidebar.hidden {
+    transform: translateX(-100%);
+    margin-left: 0 !important;
+  }
+
+  /* Overlay backdrop */
+  #sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 199;
+    background: rgba(0,0,0,0.4);
+  }
+  #sidebar-overlay.active {
+    display: block;
+  }
+
+  /* Main takes full width since sidebar is no longer in flow */
+  #main {
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  /* Tighten header padding */
+  #top-header {
+    padding: 0 12px;
+  }
+
+  /* Chat sub-header: tighten padding */
+  #chat-header {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  /* Truncate long session titles */
+  #chat-title {
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+  }
+
+  /* Status badge: smaller on mobile */
+  .status-idle,
+  .status-running,
+  .status-error {
+    font-size: 10px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+  }
+
+  /* Session info bar: single-line, no hover-expand, font smaller */
+  #session-info-bar {
+    padding: 3px 12px;
+    font-size: 10px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  /* Always show detail fields on mobile (no hover) */
+  #session-info-bar .sib-detail {
+    display: contents;
+  }
+  /* Hide less-important fields and their orphaned separators */
+  #sib-id,
+  .sib-sep-before-id,
+  #sib-dir,
+  #sib-mode-wrap,
+  .sib-sep-before-tasks {
+    display: none;
+  }
+  .sib-sep {
+    margin: 0 4px;
+  }
+
+  /* Input bar: proportional spacing, touch-friendly */
+  #input-bar {
+    padding: 8px 10px;
+    gap: 4px;
+  }
+
+  /* Attach & slash buttons: slightly smaller touch target */
+  #btn-attach {
+    padding: 4px;
+  }
+  #btn-slash {
+    padding: 4px 6px;
+    font-size: 14px;
+  }
+
+  /* Textarea: prevent iOS auto-zoom (must be ≥16px) */
+  #user-input {
+    font-size: 16px;
+    padding: 7px 10px;
+  }
+
+  /* Send button: bigger tap target */
+  #btn-send, #btn-interrupt {
+    padding: 7px 14px;
+    font-size: 14px;
+  }
+
+  /* Back button: only visible on mobile when inside a session */
+  .chat-back-btn {
+    display: flex;
+  }
+
+  /* Welcome page: vertically centered but shifted up, add horizontal padding */
+  #welcome {
+    justify-content: center;
+    padding-bottom: 30vh;
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
+  /* ── Tasks page ── */
+  #task-detail-panel {
+    overflow: visible;
+    height: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  #task-detail-body {
+    padding: 16px 16px 80px;
+    gap: 12px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    flex: 1;
+    min-height: 0;
+  }
+  /* btn-create-task: move below title instead of absolute top-right */
+  .task-page-header {
+    flex-direction: column;
+    padding-right: 0;
+  }
+  .btn-create-task {
+    position: static;
+    align-self: flex-start;
+    margin-top: 4px;
+  }
+  /* Table: let it scroll horizontally, keep columns readable */
+  #task-list-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* ── Task table: mobile layout ── */
+  .task-table-header {
+    display: none;
+  }
+  .task-table-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  /* Name col takes all remaining space */
+  .task-col-name {
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+  }
+  /* Show schedule as subtitle under the task name */
+  .task-name-sched {
+    display: block;
+    font-size: 11px;
+    font-family: monospace;
+    color: var(--color-warning);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Hide standalone schedule & content columns */
+  .task-col-schedule,
+  .task-col-content {
+    display: none;
+  }
+  /* Actions: fixed width, icon-only buttons */
+  .task-col-actions {
+    flex-shrink: 0;
+    width: 104px;
+    gap: 4px;
+  }
+  .task-btn .btn-label {
+    display: none;
+  }
+  .task-btn {
+    padding: 6px;
+    width: 30px;
+    height: 30px;
+    justify-content: center;
+  }
+
+  /* ── Skills page ── */
+  #skills-panel {
+    overflow: visible;
+    height: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  #skills-body {
+    padding: 16px 16px 80px;
+    gap: 12px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    flex: 1;
+    min-height: 0;
+  }
+  /* action buttons: move below title, inline row */
+  .skills-page-header {
+    padding-right: 0;
+  }
+  .skill-action-btns {
+    position: static;
+    margin-top: 8px;
+  }
+  /* Show system skills toggle: give right margin */
+  #label-show-system {
+    margin-right: 8px;
+  }
+
+  /* ── Settings page ── */
+  #settings-header {
+    padding: 12px 16px;
+    font-size: 15px;
+  }
+  #settings-body {
+    padding: 16px 16px 80px;
+    gap: 24px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  #settings-panel {
+    overflow: visible;
+    height: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  .settings-section-title {
+    font-size: 15px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  /* Add Model button: full width on mobile */
+  .btn-settings-add {
+    width: 100%;
+    justify-content: center;
+  }
+  /* Model card: tighter, stack actions */
+  .model-card {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+  .model-card-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .model-card-actions {
+    flex-wrap: wrap;
+  }
+
+  /* ── Channels page ── */
+  #channels-panel {
+    overflow: visible;
+    height: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  #channels-body {
+    padding: 16px 16px 80px;
+    gap: 16px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  /* Channel card: tighter padding, stack footer buttons */
+  .channel-card {
+    padding: 14px 16px;
+    gap: 12px;
+  }
+  .channel-card-footer {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .channel-card-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
 }

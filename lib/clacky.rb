@@ -3,6 +3,7 @@
 require_relative "clacky/version"
 require_relative "clacky/message_format/anthropic"
 require_relative "clacky/message_format/open_ai"
+require_relative "clacky/message_format/bedrock"
 require_relative "clacky/client"
 require_relative "clacky/skill"
 require_relative "clacky/skill_loader"
@@ -28,6 +29,7 @@ require_relative "clacky/ui2/progress_indicator"
 
 # Utils
 require_relative "clacky/utils/logger"
+require_relative "clacky/utils/encoding"
 require_relative "clacky/utils/model_pricing"
 require_relative "clacky/utils/gitignore_parser"
 require_relative "clacky/utils/limit_stack"
@@ -60,6 +62,7 @@ require_relative "clacky/agent"
 
 require_relative "clacky/server/session_registry"
 require_relative "clacky/server/web_ui_controller"
+require_relative "clacky/server/browser_manager"
 require_relative "clacky/cli"
 
 module Clacky
@@ -67,4 +70,5 @@ module Clacky
   class AgentError < StandardError; end
   class RetryableError < StandardError; end  # Transient errors that should be retried (5xx, HTML response, rate limit)
   class ToolCallError < AgentError; end  # Raised when tool call fails due to invalid parameters
+  # BrowserManager singleton: Clacky::BrowserManager.instance
 end

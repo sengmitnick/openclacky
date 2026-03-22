@@ -2,9 +2,34 @@
 
 require "tmpdir"
 require_relative "base"
+require_relative "../utils/encoding"
 
 module Clacky
   module Tools
+    # A StringIO wrapper that scrubs invalid/undefined bytes to UTF-8 on every
+    # write.  Shell commands (via popen3) can emit bytes in any encoding
+    # (GBK, Latin-1, binary, …).  By sanitizing at the earliest possible point
+    # we guarantee that every downstream operation — regex matching, line
+    # splitting, JSON serialization — never sees invalid byte sequences.
+    class EncodingSafeBuffer
+      def initialize
+        @io = StringIO.new("".b)
+      end
+
+      def write(data)
+        return unless data && !data.empty?
+
+        # Shell output arrives as binary (ASCII-8BIT) bytes.  Use the shared
+        # helper which re-labels encoding as UTF-8 and scrubs only genuinely
+        # invalid sequences, preserving multibyte characters (e.g. CJK).
+        @io.write(Clacky::Utils::Encoding.to_utf8(data))
+      end
+
+      def string
+        @io.string
+      end
+    end
+
     class Shell < Base
       self.tool_name = "shell"
       self.tool_description = "Execute shell commands in the terminal"
@@ -63,8 +88,8 @@ module Clacky
 
         soft_timeout, hard_timeout = determine_timeouts(command, soft_timeout, hard_timeout)
 
-        stdout_buffer = StringIO.new
-        stderr_buffer = StringIO.new
+        stdout_buffer = EncodingSafeBuffer.new
+        stderr_buffer = EncodingSafeBuffer.new
         soft_timeout_triggered = false
         process_pid = nil
         
@@ -365,13 +390,18 @@ module Clacky
         # Return error info as-is if command failed or timed out
         return result if result[:error] || result[:state] == 'TIMEOUT' || result[:state] == 'WAITING_INPUT'
 
-        stdout = result[:stdout] || ""
-        stderr = result[:stderr] || ""
+        # Ensure all string fields are valid UTF-8 before JSON serialization.
+        # stdout/stderr are already scrubbed by EncodingSafeBuffer, but :command
+        # (and any other string field) may still carry ASCII-8BIT encoding when
+        # the caller built the command from binary paths or ENV values.
+        enc = Clacky::Utils::Encoding
+        stdout = enc.to_utf8(result[:stdout] || "")
+        stderr = enc.to_utf8(result[:stderr] || "")
         exit_code = result[:exit_code] || 0
 
         # Build compact result with truncated output
         compact = {
-          command: result[:command],
+          command: enc.to_utf8(result[:command].to_s),
           exit_code: exit_code,
           success: result[:success]
         }
@@ -380,7 +410,7 @@ module Clacky
         compact[:elapsed] = result[:elapsed] if result[:elapsed]
 
         # Extract command name for temp file naming
-        command_name = extract_command_name(result[:command])
+        command_name = extract_command_name(compact[:command])
 
         # Process stdout: truncate and optionally save to temp file
         stdout_info = truncate_and_save(stdout, MAX_LLM_OUTPUT_CHARS, "stdout", command_name)

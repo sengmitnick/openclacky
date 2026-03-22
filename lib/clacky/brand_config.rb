@@ -13,13 +13,12 @@ module Clacky
   # BrandConfig manages white-label branding for the OpenClacky gem.
   #
   # Brand information is stored separately in ~/.clacky/brand.yml to avoid
-  # polluting the main config.yml. When no brand_name is configured, the
+  # polluting the main config.yml. When no product_name is configured, the
   # gem behaves exactly like the standard OpenClacky experience.
   #
   # brand.yml structure:
-  #   brand_name: "JohnAI"
-  #   distribution_name: "JohnAI Distribution"
-  #   product_name: "JohnAI Pro"
+  #   product_name: "JohnAI"
+  #   package_name: "johnai"
   #   logo_url: "https://example.com/logo.png"
   #   support_contact: "support@johnai.com"
   #   support_qr_url: "https://example.com/qr.png"
@@ -45,17 +44,14 @@ module Clacky
     # Grace period for offline heartbeat failures (3 days)
     HEARTBEAT_GRACE_PERIOD = 3 * 86_400
 
-    attr_reader :brand_name, :license_key, :license_activated_at,
+    attr_reader :product_name, :package_name, :license_key, :license_activated_at,
                 :license_expires_at, :license_last_heartbeat, :device_id,
-                :brand_command, :distribution_name, :product_name,
                 :logo_url, :support_contact, :license_user_id,
                 :support_qr_url, :theme_color, :homepage_url
 
     def initialize(attrs = {})
-      @brand_name              = attrs["brand_name"]
-      @brand_command           = attrs["brand_command"]
-      @distribution_name       = attrs["distribution_name"]
       @product_name            = attrs["product_name"]
+      @package_name            = attrs["package_name"]
       @logo_url                = attrs["logo_url"]
       @support_contact         = attrs["support_contact"]
       @support_qr_url          = attrs["support_qr_url"]
@@ -87,9 +83,9 @@ module Clacky
       new({})
     end
 
-    # Returns true when this installation has a brand name configured.
+    # Returns true when this installation has a product name configured.
     def branded?
-      !@brand_name.nil? && !@brand_name.strip.empty?
+      !@product_name.nil? && !@product_name.strip.empty?
     end
 
     # Returns true when a license key has been stored (post-activation).
@@ -162,8 +158,7 @@ module Clacky
         @license_activated_at   = Time.now.utc
         @license_last_heartbeat = Time.now.utc
         @license_expires_at     = parse_time(data["expires_at"])
-        # Use brand_name returned by the API; fall back to any existing value
-        @brand_name = data["brand_name"] if data["brand_name"] && !data["brand_name"].to_s.strip.empty?
+        # product_name is applied via apply_distribution; no top-level product_name field expected at this level
         # Save owner_user_id returned by the server when the license is bound to a specific user.
         # Server returns "owner_user_id" for system licenses; plan-based licenses return nil.
         owner_uid = data["owner_user_id"]
@@ -177,7 +172,7 @@ module Clacky
         @device_id = server_device_id unless server_device_id.empty?
         apply_distribution(data["distribution"])
         save
-        { success: true, message: "License activated successfully!", brand_name: @brand_name,
+        { success: true, message: "License activated successfully!", product_name: @product_name,
           user_id: @license_user_id, data: data }
       else
         @license_key = nil
@@ -188,21 +183,21 @@ module Clacky
     # Activate the license locally without calling the remote API.
     # Used in brand-test mode for development and integration testing.
     #
-    # The mock derives a plausible brand_name from the key's first segment
+    # The mock derives a plausible product_name from the key's first segment
     # (e.g. "0000002A" → user_id 42 → "Brand42") unless one is already set.
     # A fixed 1-year expiry is written so the UI can display a realistic date.
     #
-    # Returns the same { success:, message:, brand_name:, data: } shape as activate!
+    # Returns the same { success:, message:, product_name:, data: } shape as activate!
     def activate_mock!(license_key)
       @license_key = license_key.strip
       # Pin a stable device_id for this activation. Once set (from a prior load or
       # a previous call), never regenerate — the same rule as activate!.
       @device_id ||= generate_device_id
 
-      # Always derive brand_name fresh from the key in mock mode,
+      # Always derive product_name fresh from the key in mock mode,
       # so switching keys produces a different brand each time.
-      user_id     = parse_user_id_from_key(@license_key)
-      @brand_name = "Brand#{user_id}"
+      user_id       = parse_user_id_from_key(@license_key)
+      @product_name = "Brand#{user_id}"
 
       @license_activated_at   = Time.now.utc
       @license_last_heartbeat = Time.now.utc
@@ -210,10 +205,10 @@ module Clacky
       save
 
       {
-        success:    true,
-        message:    "License activated (mock mode).",
-        brand_name: @brand_name,
-        data:       { status: "active", expires_at: @license_expires_at.iso8601 }
+        success:      true,
+        message:      "License activated (mock mode).",
+        product_name: @product_name,
+        data:         { status: "active", expires_at: @license_expires_at.iso8601 }
       }
     end
 
@@ -256,7 +251,7 @@ module Clacky
     # zip_data is the raw binary content of the ZIP file.
     # Returns { success: bool, error: String }.
     # Upload a skill ZIP to the OpenClacky cloud.
-    # skill_name: slug string
+    # skill_name: skill name string (slug format)
     # zip_data:   binary ZIP content
     # force:      when true, use PATCH to overwrite an existing skill instead of POST
     #
@@ -277,8 +272,8 @@ module Clacky
       message   = "#{user_id}:#{@device_id}:#{ts}:#{nonce}"
       signature = OpenSSL::HMAC.hexdigest("SHA256", @license_key, message)
 
-      # POST /api/v1/client/skills        → create (first upload)
-      # PATCH /api/v1/client/skills/:slug → update (force overwrite)
+      # POST /api/v1/client/skills         → create (first upload)
+      # PATCH /api/v1/client/skills/:name → update (force overwrite)
       if force
         uri = URI.parse("#{API_BASE_URL}/api/v1/client/skills/#{URI.encode_www_form_component(skill_name)}")
       else
@@ -304,7 +299,7 @@ module Clacky
         "timestamp" => ts,
         "nonce"     => nonce,
         "signature" => signature,
-        "slug"      => skill_name.to_s
+        "name"      => skill_name.to_s
       }
       # Include version override when bumping an existing skill version
       fields["version"] = version_override.to_s if version_override
@@ -344,9 +339,9 @@ module Clacky
         msg    = [code, errors].compact.join(": ")
         msg    = "Upload failed (HTTP #{response.code})" if msg.empty?
 
-        # Detect "already exists" conflicts (HTTP 409 or slug_taken error code)
+        # Detect "already exists" conflicts (HTTP 409 or name_taken error code)
         # so the caller can offer the user an overwrite option.
-        already_exists = code_i == 409 || code.to_s.include?("slug_taken") || code.to_s.include?("already")
+        already_exists = code_i == 409 || code.to_s.include?("name_taken") || code.to_s.include?("already")
         { success: false, error: msg, already_exists: already_exists }
       end
     rescue StandardError => e
@@ -360,7 +355,7 @@ module Clacky
     # Returns { success: bool, skills: [], error: }.
     #
     # Each skill in the returned array is a hash with at minimum:
-    #   "slug", "name", "description", "icon", "repo"
+    #   "name", "description", "icon", "repo"
     def fetch_store_skills!
       return { success: false, error: "License not activated", skills: [] } unless activated?
 
@@ -420,8 +415,10 @@ module Clacky
         # Merge local installed version info into each skill
         installed = installed_brand_skills
         skills = (body["skills"] || []).map do |skill|
-          slug         = skill["slug"] || skill["name"]&.downcase&.gsub(/\s+/, "-")
-          local        = installed[slug]
+          # Normalize name to valid skill name format; prefer the matching local installed dir name
+          normalized   = skill["name"].to_s.downcase.gsub(/[\s_]+/, "-").gsub(/[^a-z0-9-]/, "").gsub(/-+/, "-")
+          name         = installed.keys.find { |k| k == normalized } || normalized
+          local        = installed[name]
           # The authoritative "latest" version lives in latest_version.version when present,
           # falling back to the top-level version field for older API responses.
           latest_ver   = (skill["latest_version"] || {})["version"] || skill["version"]
@@ -429,7 +426,7 @@ module Clacky
           # If local >= latest (e.g. a dev build), suppress the update badge.
           needs_update = local ? version_older?(local["version"], latest_ver) : false
           skill.merge(
-            "slug"              => slug,
+            "name"              => name,
             "installed_version" => local ? local["version"] : nil,
             "needs_update"      => needs_update
           )
@@ -441,16 +438,16 @@ module Clacky
     end
 
     # Install (or update) a single brand skill by downloading and extracting its zip.
-    # skill_info: a hash from fetch_brand_skills! with at least slug + latest_version.download_url + version
+    # skill_info: a hash from fetch_brand_skills! with at least name + latest_version.download_url + version
     def install_brand_skill!(skill_info)
       require "net/http"
       require "uri"
 
-      slug    = skill_info["slug"].to_s.strip
+      slug    = skill_info["name"].to_s.strip
       version = (skill_info["latest_version"] || {})["version"] || skill_info["version"]
       url     = (skill_info["latest_version"] || {})["download_url"]
 
-      return { success: false, error: "Missing slug" } if slug.empty?
+      return { success: false, error: "Missing skill name" } if slug.empty?
 
       if url.nil?
         FileUtils.mkdir_p(File.join(brand_skills_dir, slug))
@@ -512,9 +509,9 @@ module Clacky
       # Record installed version in brand_skills.json (including description for
       # offline display when the remote API is unreachable).
       # encrypted: true because the ZIP contains MANIFEST.enc.json + AES-256-GCM encrypted files.
-      record_installed_skill(slug, version, skill_info["name"], skill_info["description"], encrypted: true)
+      record_installed_skill(slug, version, skill_info["description"], encrypted: true)
 
-      { success: true, slug: slug, version: version }
+      { success: true, name: slug, version: version }
     rescue StandardError, ScriptError => e
       { success: false, error: e.message }
     end
@@ -531,17 +528,17 @@ module Clacky
     # is also mocked.  Both sides will be replaced together during backend
     # integration.
     #
-    # @param skill_info [Hash] Must include "slug", "name", "description", and
+    # @param skill_info [Hash] Must include "name", "description", and
     #   optionally "version" and "emoji".
-    # @return [Hash] { success: bool, slug:, version: }
+    # @return [Hash] { success: bool, name:, version: }
     def install_mock_brand_skill!(skill_info)
-      slug        = skill_info["slug"].to_s.strip
+      slug        = skill_info["name"].to_s.strip
       version     = (skill_info["latest_version"] || {})["version"] || skill_info["version"] || "1.0.0"
-      name        = skill_info["name"] || slug
+      name        = slug
       description = skill_info["description"] || "A private brand skill."
       emoji       = skill_info["emoji"] || "⭐"
 
-      return { success: false, error: "Missing slug" } if slug.empty?
+      return { success: false, error: "Missing skill name" } if slug.empty?
 
       dest_dir = File.join(brand_skills_dir, slug)
       FileUtils.mkdir_p(dest_dir)
@@ -574,8 +571,8 @@ module Clacky
       File.binwrite(enc_path, mock_content.encode("UTF-8"))
 
       # encrypted: false — mock skills store plain bytes in .enc, no MANIFEST needed.
-      record_installed_skill(slug, version, name, description, encrypted: false)
-      { success: true, slug: slug, version: version }
+      record_installed_skill(slug, version, description, encrypted: false)
+      { success: true, name: slug, version: version }
     rescue StandardError => e
       { success: false, error: e.message }
     end
@@ -603,7 +600,11 @@ module Clacky
           result = fetch_brand_skills!
           next unless result[:success]
 
-          skills_needing_update = result[:skills].select { |s| s["needs_update"] || s["installed_version"].nil? }
+          # Auto-sync is intentionally limited to skills the user has already
+          # installed and that have a newer version available.
+          # New skills are never auto-installed — the user must click Install/Update
+          # explicitly from the Brand Skills panel.
+          skills_needing_update = result[:skills].select { |s| s["needs_update"] }
           results = skills_needing_update.map do |skill_info|
             install_brand_skill!(skill_info)
           end
@@ -636,7 +637,7 @@ module Clacky
     #   When no MANIFEST.enc.json exists in the skill directory, the method falls
     #   back to reading the .enc file as raw UTF-8 bytes (mock/dev mode).
     #
-    # @param encrypted_path [String] Path to the .enc file on disk (e.g. ".../slug/SKILL.md.enc")
+    # @param encrypted_path [String] Path to the .enc file on disk (e.g. ".../name/SKILL.md.enc")
     # @return [String] Decrypted file content (UTF-8)
     # @raise [RuntimeError] If license is not activated or decryption fails
     def decrypt_skill_content(encrypted_path)
@@ -699,7 +700,7 @@ module Clacky
     # is silently dropped from the result and the JSON file is cleaned up so
     # subsequent installs start from a clean state.
     #
-    # Returns a hash keyed by slug: { "version" => "1.0.0", "name" => "..." }
+    # Returns a hash keyed by name: { "version" => "1.0.0", "name" => "..." }
     def installed_brand_skills
       path = File.join(brand_skills_dir, "brand_skills.json")
       return {} unless File.exist?(path)
@@ -710,13 +711,13 @@ module Clacky
       valid   = {}
       changed = false
 
-      raw.each do |slug, meta|
-        skill_dir = File.join(brand_skills_dir, slug)
+      raw.each do |name, meta|
+        skill_dir = File.join(brand_skills_dir, name)
         has_files = Dir.exist?(skill_dir) &&
                     Dir.glob(File.join(skill_dir, "SKILL.md{,.enc}")).any?
 
         if has_files
-          valid[slug] = meta
+          valid[name] = meta
         else
           # JSON record exists but files are missing — mark for cleanup.
           changed = true
@@ -736,10 +737,8 @@ module Clacky
     # Returns a hash representation for JSON serialization (e.g. /api/brand).
     def to_h
       {
-        brand_name:         @brand_name,
-        brand_command:      @brand_command,
-        distribution_name:  @distribution_name,
         product_name:       @product_name,
+        package_name:       @package_name,
         logo_url:           @logo_url,
         support_contact:    @support_contact,
         support_qr_url:     @support_qr_url,
@@ -758,10 +757,8 @@ module Clacky
 
     def to_yaml
       data = {}
-      data["brand_name"]             = @brand_name             if @brand_name
-      data["brand_command"]          = @brand_command          if @brand_command
-      data["distribution_name"]      = @distribution_name      if @distribution_name
       data["product_name"]           = @product_name           if @product_name
+      data["package_name"]           = @package_name           if @package_name
       data["logo_url"]               = @logo_url               if @logo_url
       data["support_contact"]        = @support_contact        if @support_contact
       data["support_qr_url"]         = @support_qr_url         if @support_qr_url
@@ -796,19 +793,18 @@ module Clacky
     end
 
     # Apply distribution fields from API response.
-    # Updates name, product_name, logo_url, support_contact, support_qr_url,
+    # Updates product_name, package_name, logo_url, support_contact, support_qr_url,
     # theme_color, and homepage_url from the distribution hash.
     private def apply_distribution(dist)
       return unless dist.is_a?(Hash)
 
-      @distribution_name = dist["name"]            if dist["name"].to_s.strip != ""
-      @product_name      = dist["product_name"]    if dist["product_name"].to_s.strip != ""
-      @logo_url          = dist["logo_url"]         if dist["logo_url"].to_s.strip != ""
-      @support_contact   = dist["support_contact"]  if dist["support_contact"].to_s.strip != ""
-      # New branding fields returned by the API (logo, QR code, theme, homepage)
-      @support_qr_url    = dist["support_qr_url"]   if dist.key?("support_qr_url")
-      @theme_color       = dist["theme_color"]       if dist.key?("theme_color")
-      @homepage_url      = dist["homepage_url"]      if dist.key?("homepage_url")
+      @product_name    = dist["product_name"]   if dist["product_name"].to_s.strip != ""
+      @package_name    = dist["package_name"]   if dist["package_name"].to_s.strip != ""
+      @logo_url        = dist["logo_url"]        if dist["logo_url"].to_s.strip != ""
+      @support_contact = dist["support_contact"] if dist["support_contact"].to_s.strip != ""
+      @support_qr_url  = dist["support_qr_url"]  if dist.key?("support_qr_url")
+      @theme_color     = dist["theme_color"]      if dist.key?("theme_color")
+      @homepage_url    = dist["homepage_url"]     if dist.key?("homepage_url")
     end
 
     # Download a remote URL to a local file path.
@@ -848,18 +844,59 @@ module Clacky
     #
     # description is stored so it can be shown locally even when the remote API
     # is unreachable (e.g. offline or license server down).
-    private def record_installed_skill(slug, version, name, description = nil, encrypted: true)
+    #
+    # The stored `name` must be a valid skill name (lowercase letters, numbers,
+    # hyphens only; no leading/trailing hyphens) because it is used as the
+    # slash command identifier (/name).  We sanitize aggressively here so that
+    # bad data from the platform never reaches the local registry:
+    #
+    #   1. name already valid            → use name as-is
+    #   2. name invalid — sanitize       → downcase, spaces→hyphens, strip illegal chars
+    #   3. still invalid after sanitize  → raise, caller gets { success: false }
+    private def record_installed_skill(name, version, description = nil, encrypted: true)
+      safe_name = sanitize_skill_name(name)
+
       FileUtils.mkdir_p(brand_skills_dir)
       path      = File.join(brand_skills_dir, "brand_skills.json")
       installed = installed_brand_skills
-      installed[slug] = {
+      installed[safe_name] = {
         "version"      => version,
-        "name"         => name,
+        "name"         => safe_name,
         "description"  => description.to_s,
         "encrypted"    => encrypted,
         "installed_at" => Time.now.utc.iso8601
       }
       File.write(path, JSON.generate(installed))
+    end
+
+    # Normalize a skill name to a valid identifier (lowercase letters, numbers, hyphens).
+    # @param name [String, nil] Raw name from platform
+    # @return [String] A valid skill name
+    # @raise [RuntimeError] When sanitization still yields an invalid name
+    private def sanitize_skill_name(name)
+      valid_name = ->(s) { s.to_s.match?(/\A[a-z0-9][a-z0-9-]*[a-z0-9]\z/) || s.to_s.match?(/\A[a-z0-9]\z/) }
+
+      # 1. name already valid
+      return name if valid_name.call(name)
+
+      # 2. name invalid — sanitize: downcase, spaces/underscores → hyphens, strip illegal chars
+      sanitized = name.to_s
+        .downcase
+        .gsub(/[\s_]+/, "-")
+        .gsub(/[^a-z0-9-]/, "")
+        .gsub(/-+/, "-")
+        .gsub(/\A-+|-+\z/, "")
+
+      if valid_name.call(sanitized)
+        Clacky::Logger.warn(
+          "Brand skill name '#{name}' is not a valid name; sanitized to '#{sanitized}'."
+        )
+        return sanitized
+      end
+
+      # 3. still invalid — refuse to write garbage into the registry
+      raise "Cannot derive a valid skill name from '#{name}'. " \
+            "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
     end
 
     # Fetch the AES-256-GCM decryption key for a skill version from the server.

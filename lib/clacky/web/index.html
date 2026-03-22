@@ -42,6 +42,9 @@
     </div>
   </header>
 
+  <!-- ── Sidebar overlay (mobile only) ───────────────────────────────────── -->
+  <div id="sidebar-overlay"></div>
+
   <!-- ── CONTENT ROW (Sidebar + Main) ────────────────────────────────────── -->
   <div id="content-row">
 
@@ -164,6 +167,12 @@
     <!-- Chat panel -->
     <div id="chat-panel" style="display:none">
       <header id="chat-header">
+        <!-- Mobile-only back button: shown inside a session -->
+        <button id="btn-back-mobile" class="chat-back-btn" title="Back">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
         <span id="chat-title">Session</span>
         <span id="chat-status" class="status-idle">idle</span>
         <button id="btn-delete-session" class="btn-delete-session" title="Delete session">
@@ -177,7 +186,7 @@
       <div id="session-info-bar" style="display:none">
         <!-- Always visible: status | id | model | cost -->
         <span id="sib-status"></span>
-        <span class="sib-sep">│</span>
+        <span class="sib-sep sib-sep-before-id">│</span>
         <span id="sib-id"></span>
         <span id="sib-model-wrap"><span class="sib-sep">│</span><span id="sib-model"></span></span>
         <span class="sib-sep">│</span>
@@ -187,7 +196,7 @@
           <span class="sib-sep">│</span>
           <span id="sib-dir"></span>
           <span id="sib-mode-wrap"><span class="sib-sep">│</span><span id="sib-mode"></span></span>
-          <span class="sib-sep">│</span>
+          <span class="sib-sep sib-sep-before-tasks">│</span>
           <span id="sib-tasks"></span>
         </span>
       </div>
@@ -253,6 +262,14 @@
 
         <!-- Tab: My Skills -->
         <div id="skills-tab-my" class="skills-tab-content">
+          <!-- Filter bar -->
+          <div class="skills-filter-bar">
+            <label class="skills-filter-toggle" id="label-show-system">
+              <input type="checkbox" id="chk-show-system-skills">
+              <span class="skills-filter-toggle-track"></span>
+              <span class="skills-filter-label" data-i18n="skills.filter.showSystem">Show system skills</span>
+            </label>
+          </div>
           <!-- Inline import bar (toggled by Import button) -->
           <div id="skill-import-bar" class="skill-import-bar" style="display:none">
             <div class="skill-import-bar-inner">
@@ -334,6 +351,17 @@
           <div class="settings-personalize">
             <p class="settings-personalize-desc" data-i18n="settings.personalize.desc">Re-run the onboarding to update your assistant's personality and user profile (SOUL.md &amp; USER.md).</p>
             <button id="btn-rerun-onboard" class="btn-settings-action" data-i18n="settings.personalize.btn">✨ Re-run Onboard</button>
+          </div>
+        </section>
+
+        <!-- Browser section -->
+        <section class="settings-section">
+          <div class="settings-section-title">
+            <span data-i18n="settings.browser.title">Browser</span>
+          </div>
+          <div class="settings-personalize">
+            <p class="settings-personalize-desc" id="browser-status-desc" data-i18n="settings.browser.desc">Connect your browser to enable browser automation.</p>
+            <button id="btn-browser-setup" class="btn-settings-action" data-i18n="settings.browser.btn">🌐 Configure Browser</button>
           </div>
         </section>
 

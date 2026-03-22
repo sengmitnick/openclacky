@@ -2,6 +2,7 @@
 
 require_relative "screen_buffer"
 require_relative "../utils/limit_stack"
+require_relative "../utils/encoding"
 
 module Clacky
   module UI2
@@ -242,8 +243,7 @@ module Clacky
 
         # Scrub any invalid byte sequences before they reach the render pipeline.
         # wrap_long_line calls each_char which raises ArgumentError on invalid UTF-8.
-        content = content.encode('UTF-8', 'UTF-8', invalid: :replace, undef: :replace, replace: '') \
-          unless content.valid_encoding?
+        content = Clacky::Utils::Encoding.sanitize_utf8(content) unless content.valid_encoding?
 
         @render_mutex.synchronize do
           lines = content.split("\n", -1)  # -1 to keep trailing empty strings
@@ -273,9 +273,37 @@ module Clacky
 
           return if @output_row == 0  # No output yet
 
+          lines = content.split("\n", -1)
+          new_line_count = lines.length
+
           # Calculate start row (last N lines)
           start_row = @output_row - old_line_count
           start_row = 0 if start_row < 0
+
+          # If lines grew, check if we would overflow into the fixed area and scroll if needed
+          if new_line_count > old_line_count
+            max_output_row = fixed_area_start_row
+            needed_end_row = start_row + new_line_count
+
+            if needed_end_row > max_output_row
+              # Calculate how many extra rows we need
+              overflow = needed_end_row - max_output_row
+
+              # Scroll the terminal by printing newlines at the bottom of the output area
+              overflow.times do
+                screen.move_cursor(screen.height - 1, 0)
+                print "\n"
+              end
+
+              # Adjust start_row and output_row upward after scroll
+              start_row -= overflow
+              start_row = 0 if start_row < 0
+              @output_row = [start_row + old_line_count, max_output_row].min
+
+              # Re-render fixed areas after scroll to prevent corruption
+              render_fixed_areas
+            end
+          end
 
           # Clear all lines that will be updated
           (start_row...@output_row).each do |row|
@@ -289,10 +317,9 @@ module Clacky
           end
 
           # Re-render the content
-          lines = content.split("\n", -1)
           current_row = start_row
 
-          lines.each_with_index do |line, idx|
+          lines.each do |line|
             screen.move_cursor(current_row, 0)
             print line
             # Add updated line to buffer
@@ -301,11 +328,11 @@ module Clacky
           end
 
           # Update output_row to new line count
-          @output_row = start_row + lines.length
+          @output_row = start_row + new_line_count
 
           # Clear any remaining old lines if new content has fewer lines
           # This handles the case where content shrinks (e.g., delete from 2 lines to 1 line)
-          old_end_row = @output_row + (old_line_count - lines.length)
+          old_end_row = @output_row + (old_line_count - new_line_count)
           if old_end_row > @output_row && old_end_row <= start_row + old_line_count
             # Clear the extra old lines
             (@output_row...old_end_row).each do |row|

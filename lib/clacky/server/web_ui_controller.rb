@@ -65,11 +65,23 @@ module Clacky
 
       # === Output display ===
 
-      def show_user_message(content, created_at: nil, images: [])
+      def show_user_message(content, created_at: nil, files: [], source: :web)
         data = { content: content }
         data[:created_at] = created_at if created_at
-        data[:images]     = images if images && !images.empty?
+        # Build ev.images for the frontend renderer (history_user_message):
+        #   - Images with data_url → pass the data_url directly (<img> thumbnail)
+        #   - Disk files (PDF, doc, etc., no data_url) → "pdf:name" sentinel (renders a badge)
+        rendered = Array(files).filter_map do |f|
+          url  = f[:data_url] || f["data_url"]
+          name = f[:name]     || f["name"]
+          url || (name ? "pdf:#{name}" : nil)
+        end
+        data[:images] = rendered unless rendered.empty?
         emit("history_user_message", **data)
+        # Only forward to channel subscribers when the message originated from the WebUI,
+        # to avoid echoing channel messages back to the same channel.
+        return unless source == :web
+        forward_to_subscribers { |sub| sub.show_user_message(content) if sub.respond_to?(:show_user_message) }
       end
 
       def show_assistant_message(content, files:)

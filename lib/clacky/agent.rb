@@ -68,6 +68,7 @@ module Clacky
       @interrupted = false  # Flag for user interrupt
       @ui = ui  # UIController for direct UI interaction
       @debug_logs = []  # Debug logs for troubleshooting
+      @pending_injections = []  # Pending inline skill injections to flush after observe()
 
       # Compression tracking
       @compression_level = 0  # Tracks how many times we've compressed (for progressive summarization)
@@ -98,6 +99,9 @@ module Clacky
       # Agent startup is not blocked by slow MCP server connections.
       @mcp_clients = []
       connect_mcp_servers_async!
+
+      # Ensure user-space parsers are in place (~/.clacky/parsers/)
+      Utils::ParserManager.setup!
     end
 
     # Restore from a saved session
@@ -187,28 +191,74 @@ module Clacky
 
       # Split files into vision images and disk files; downgrade oversized images to disk
       image_files, disk_files = partition_files(Array(files))
-      vision_urls, downgraded  = resolve_vision_images(image_files)
+      vision_images, downgraded = resolve_vision_images(image_files)
       all_disk_files = disk_files + downgraded
 
       # Format user message — text + inline vision images
-      user_content = format_user_content(user_input, vision_urls)
-      @history.append({ role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f })
+      user_content = format_user_content(user_input, vision_images.map { |v| v[:url] })
+
+      # Parse disk files — agent's responsibility, not the upload layer.
+      # process_path runs the parser script and returns a FileRef with preview_path or parse_error.
+      all_disk_files = all_disk_files.map do |f|
+        path = f[:path] || f["path"]
+        name = f[:name] || f["name"]
+        next f unless path && File.exist?(path.to_s)
+        ref = Utils::FileProcessor.process_path(path, name: name)
+        { name: ref.name, type: ref.type.to_s, path: ref.original_path,
+          preview_path: ref.preview_path, parse_error: ref.parse_error, parser_path: ref.parser_path }
+      end
+
+      # Build display_files for replay: lightweight metadata so the UI can reconstruct
+      # file badges (PDF, doc, etc.) on page refresh. Images are NOT stored here — they
+      # are recovered from the image_url blocks in user_content by extract_image_files_from_content.
+      display_files = all_disk_files.filter_map do |f|
+        name = f[:name] || f["name"]
+        next unless name
+        { name: name, type: f[:type] || f["type"] || "file",
+          preview_path: f[:preview_path] || f["preview_path"] }
+      end
+
+      @history.append({ role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f,
+                        display_files: display_files.empty? ? nil : display_files })
       @total_tasks += 1
 
       # Inject disk file references as a system_injected message so:
       #   - LLM sees the file info (system_injected is NOT stripped from to_api)
       #   - replay_history skips it (next if ev[:system_injected]), keeping the user bubble clean
-      unless all_disk_files.empty?
-        file_prompt = all_disk_files.filter_map do |f|
-          path         = f[:path]         || f["path"]
+      #
+      # Images: also injected here (alongside vision inline) so LLM knows filename + size.
+      all_meta_files = vision_images.map { |v|
+        { name: v[:name], type: "image", size_bytes: v[:size_bytes], path: v[:path] }
+      } + all_disk_files
+
+      unless all_meta_files.empty?
+        file_prompt = all_meta_files.filter_map do |f|
           name         = f[:name]         || f["name"]
           type         = f[:type]         || f["type"]
+          path         = f[:path]         || f["path"]
           preview_path = f[:preview_path] || f["preview_path"]
-          next unless path && name
+          size_bytes   = f[:size_bytes]   || f["size_bytes"]
+          parse_error  = f[:parse_error]  || f["parse_error"]
+          parser_path  = f[:parser_path]  || f["parser_path"]
+
+          next unless name
 
           lines = ["[File: #{name}]", "Type: #{type || "file"}"]
-          lines << "Original: #{path}"
+          lines << "Size: #{format_size(size_bytes)}" if size_bytes
+          lines << "Original: #{path}" if path
           lines << "Preview (Markdown): #{preview_path}" if preview_path
+
+          # Parser failed — instruct LLM to fix and re-run
+          if preview_path.nil? && parse_error
+            lines << "Parse failed: #{parse_error}"
+            if parser_path
+              expected_preview = "#{path}.preview.md"
+              lines << "Action required: fix the parser at #{parser_path}, then run:"
+              lines << "  ruby #{parser_path} #{path} > #{expected_preview}"
+              lines << "Once done, read #{expected_preview} to continue helping the user."
+            end
+          end
+
           lines.join("\n")
         end.join("\n\n")
 
@@ -291,11 +341,17 @@ module Clacky
           if action_result[:awaiting_feedback]
             awaiting_user_feedback = true
             observe(response, action_result[:tool_results])
+            flush_pending_injections
             break
           end
 
           # Observe: Add tool results to conversation context
           observe(response, action_result[:tool_results])
+
+          # Flush any inline skill injections enqueued by invoke_skill during act().
+          # Must happen AFTER observe() so toolResult is appended before skill instructions,
+          # producing a legal message sequence for all API providers (especially Bedrock).
+          flush_pending_injections
 
           # Check if user denied any tool
           if action_result[:denied]
@@ -386,7 +442,15 @@ module Clacky
         ensure
           # If interrupted or failed, roll back the speculative compression message
           # so it doesn't pollute future conversation turns.
-          @history.rollback_before(compression_message) unless compression_handled
+          unless compression_handled
+            @history.rollback_before(compression_message)
+            # Also restore compression_level since compress_messages_if_needed already incremented it.
+            # Failure to do so would cause the next call to start at level 2 instead of 1,
+            # and more importantly would re-trigger compression on the very next think() call
+            # (with the user's new message as the last entry), producing consecutive user messages
+            # that confuse the LLM into echoing compression instructions.
+            @compression_level -= 1
+          end
         end
         return nil
       end
@@ -657,6 +721,27 @@ module Clacky
     # Called when user presses Ctrl+C during agent execution
     def interrupt!
       @interrupted = true
+    end
+
+    # Enqueue an inline skill injection to be flushed after observe().
+    # Called by InvokeSkill#execute to avoid injecting during tool execution,
+    # which would break Bedrock's toolUse/toolResult pairing requirement.
+    # @param skill [Clacky::Skill] The skill whose instructions should be injected
+    # @param task [String] The task description passed to the skill
+    def enqueue_injection(skill, task)
+      @pending_injections << { skill: skill, task: task }
+    end
+
+    # Flush all pending inline skill injections into history.
+    # Must be called AFTER observe() so toolResult is appended before skill instructions,
+    # producing the correct message sequence for all API providers (especially Bedrock).
+    private def flush_pending_injections
+      return if @pending_injections.empty?
+
+      @pending_injections.each do |entry|
+        inject_skill_as_assistant_message(entry[:skill], entry[:task], @current_task_id)
+      end
+      @pending_injections.clear
     end
 
     # Check if agent is currently running
@@ -941,8 +1026,8 @@ module Clacky
     private def resolve_vision_images(image_files)
       require "base64"
       max_bytes = Utils::FileProcessor::MAX_IMAGE_BYTES
-      vision_urls = []
-      downgraded  = []
+      vision_images = []  # Array of { url:, name:, size_bytes: }
+      downgraded    = []
 
       image_files.each do |f|
         name     = f[:name]     || f["name"]     || "image.jpg"
@@ -951,28 +1036,24 @@ module Clacky
         path     = f[:path]      || f["path"]
 
         if data_url
-          # Strip header to check byte size: "data:image/jpeg;base64,<data>"
-          b64_data = data_url.split(",", 2).last.to_s
+          b64_data  = data_url.split(",", 2).last.to_s
           byte_size = (b64_data.bytesize * 3) / 4
+          raw       = Base64.decode64(b64_data)
+          file_ref  = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
           if byte_size > max_bytes
-            # Downgrade: save to disk
-            raw      = Base64.decode64(b64_data)
-            file_ref = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
-            downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime }
+            downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime, size_bytes: byte_size }
           else
-            vision_urls << data_url
+            vision_images << { url: data_url, name: name, size_bytes: byte_size, path: file_ref.original_path }
           end
         elsif path
           begin
             data_url_from_path = Utils::FileProcessor.image_path_to_data_url(path)
-            b64_data = data_url_from_path.split(",", 2).last.to_s
+            b64_data  = data_url_from_path.split(",", 2).last.to_s
             byte_size = (b64_data.bytesize * 3) / 4
             if byte_size > max_bytes
-              raw      = Base64.decode64(b64_data)
-              file_ref = Utils::FileProcessor.save_image_to_disk(body: raw, mime_type: mime, filename: name)
-              downgraded << { name: name, path: file_ref.original_path, type: "image", mime_type: mime }
+              downgraded << { name: name, path: path, type: "image", mime_type: mime, size_bytes: byte_size }
             else
-              vision_urls << data_url_from_path
+              vision_images << { url: data_url_from_path, name: name, size_bytes: byte_size, path: path }
             end
           rescue => e
             @ui&.log("Failed to load image #{name}: #{e.message}", level: :warn)
@@ -980,7 +1061,7 @@ module Clacky
         end
       end
 
-      [vision_urls, downgraded]
+      [vision_images, downgraded]
     end
 
     # Build user message content for LLM.
@@ -996,6 +1077,18 @@ module Clacky
         content << { type: "image_url", image_url: { url: url } }
       end
       content
+    end
+
+    # Format byte size as human-readable string.
+    private def format_size(bytes)
+      return "0B" unless bytes
+      if bytes >= 1024 * 1024
+        "#{(bytes / 1024.0 / 1024.0).round(1)}MB"
+      elsif bytes >= 1024
+        "#{(bytes / 1024.0).round(0).to_i}KB"
+      else
+        "#{bytes}B"
+      end
     end
 
     # Inject a session context message (date + model) into the conversation.
