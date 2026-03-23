@@ -171,6 +171,10 @@ module Clacky
         server_device_id = data["device_id"].to_s.strip
         @device_id = server_device_id unless server_device_id.empty?
         apply_distribution(data["distribution"])
+        # Clear previously installed brand skills before saving the new license.
+        # Skills from the old brand are encrypted with that brand's keys — they
+        # cannot be decrypted with the new license and must be re-downloaded.
+        clear_brand_skills!
         save
         { success: true, message: "License activated successfully!", product_name: @product_name,
           user_id: @license_user_id, data: data }
@@ -202,6 +206,8 @@ module Clacky
       @license_activated_at   = Time.now.utc
       @license_last_heartbeat = Time.now.utc
       @license_expires_at     = Time.now.utc + (365 * 86_400)  # 1 year from now
+      # Clear old brand skills so stale encrypted files from a previous brand don't linger
+      clear_brand_skills!
       save
 
       {
@@ -620,6 +626,19 @@ module Clacky
     # Path to the directory where brand skills are installed.
     def brand_skills_dir
       File.join(CONFIG_DIR, "brand_skills")
+    end
+
+    # Remove all locally installed brand skills (encrypted files + metadata).
+    # Called on license activation so stale skills from a previous brand cannot
+    # linger — they are encrypted with that brand's keys and are inaccessible
+    # under the new license anyway.
+    def clear_brand_skills!
+      dir = brand_skills_dir
+      return unless Dir.exist?(dir)
+
+      FileUtils.rm_rf(dir)
+      # Also clear in-memory decryption key cache so no stale keys survive
+      @decryption_keys.clear if @decryption_keys
     end
 
     # Decrypt an encrypted brand skill file and return its content in memory.

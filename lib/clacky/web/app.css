@@ -3698,13 +3698,15 @@ body.setup-mode[data-theme="dark"] {
   white-space: nowrap;
 }
 
-.brand-support-contact-value {
+.brand-support-contact-value,
+.brand-status-link {
   color: var(--color-accent-primary);
   text-decoration: none;
   word-break: break-all;
 }
 
-.brand-support-contact-value:hover {
+.brand-support-contact-value:hover,
+.brand-status-link:hover {
   text-decoration: underline;
 }
 

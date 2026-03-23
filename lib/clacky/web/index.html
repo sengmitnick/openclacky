@@ -27,7 +27,7 @@
           <path d="M9 3v18"/>
         </svg>
       </button>
-      <div id="header-brand">
+      <div id="header-brand" style="cursor:pointer" onclick="Router.navigate('chat')">
         <img class="header-logo-img" id="header-logo-img" src="" alt="" style="display:none">
         <span class="header-logo-divider"></span>
         <span class="header-logo" id="header-logo">{{BRAND_NAME}}</span>
@@ -421,6 +421,10 @@
                 <div class="brand-status-row">
                   <span class="brand-status-label" data-i18n="settings.brand.label.expires">Expires</span>
                   <span class="brand-status-value" id="brand-status-expires">—</span>
+                </div>
+                <div class="brand-status-row" id="brand-status-homepage-row" style="display:none">
+                  <span class="brand-status-label" data-i18n="settings.brand.label.homepage">Homepage</span>
+                  <a id="brand-status-homepage" class="brand-status-value brand-status-link" href="#" target="_blank" rel="noopener noreferrer">—</a>
                 </div>
                 <div class="brand-status-actions">
                   <button id="btn-rebind-license" class="btn-settings-action" data-i18n="settings.brand.btn.change">Change License Key</button>
