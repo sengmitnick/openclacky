@@ -96,6 +96,12 @@ module Clacky
       # Register built-in tools
       register_builtin_tools
 
+      # Connect to MCP servers declared in ~/.clacky/mcp.yml and .clacky/mcp.yml,
+      # then register their tools into the registry. Runs in a background thread so
+      # Agent startup is not blocked by slow MCP server connections.
+      @mcp_clients = []
+      connect_mcp_servers_async!
+
       # Ensure user-space parsers are in place (~/.clacky/parsers/)
       Utils::ParserManager.setup!
     end
@@ -816,6 +822,34 @@ module Clacky
       @tool_registry.register(Tools::Browser.new)
     end
 
+    # Connect to all configured MCP servers in a background daemon thread.
+    # Each server is connected independently; failures are logged and skipped.
+    # Registered tools become available to the Agent once the thread completes.
+    private def connect_mcp_servers_async!
+      mcp_cfg = McpConfig.load(working_dir: @working_dir)
+      return unless mcp_cfg.any?
+
+      Thread.new do
+        mcp_cfg.all_servers.each do |server|
+          name   = server["name"]
+          config = server.reject { |k, _| k == "name" || k.to_s.start_with?("_") }
+
+          begin
+            client = McpClient.for_server(name, config)
+            client.connect!
+
+            adapters = McpToolAdapter.from_client(client)
+            adapters.each { |adapter| @tool_registry.register(adapter) }
+
+            @mcp_clients << client
+            Clacky::Utils::Logger.debug("[MCP] Connected to '#{name}' — #{adapters.size} tool(s) registered")
+          rescue => e
+            Clacky::Utils::Logger.debug("[MCP] Failed to connect to '#{name}': #{e.message}")
+          end
+        end
+      end.tap { |t| t.abort_on_exception = false }
+    end
+
     # Fork a subagent with specified configuration
     # The subagent inherits all messages and tools from parent agent
     # Tools are not modified (for cache reuse), but forbidden tools are blocked at runtime via hooks
@@ -1083,7 +1117,8 @@ module Clacky
         "Today is #{Time.now.strftime('%Y-%m-%d, %A')}",
         "Current model: #{current_model}",
         os != :unknown ? "OS: #{Clacky::Utils::EnvironmentDetector.os_label}" : nil,
-        desktop ? "Desktop: #{desktop}" : nil
+        desktop ? "Desktop: #{desktop}" : nil,
+        @working_dir ? "Working directory: #{@working_dir}" : nil
       ].compact.join(". ")
 
       content = "[Session context: #{parts}]"

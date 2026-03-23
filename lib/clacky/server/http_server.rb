@@ -13,6 +13,7 @@ require_relative "session_registry"
 require_relative "web_ui_controller"
 require_relative "scheduler"
 require_relative "../brand_config"
+require_relative "../ui_extension_loader"
 require_relative "channel"
 require_relative "../banner"
 require_relative "../utils/file_processor"
@@ -84,6 +85,40 @@ module Clacky
     #   GET  /ws                     → WebSocket upgrade (all real-time communication)
     #   *    /api/*                  → JSON REST API (sessions, tasks, schedules)
     #   GET  /**                     → static files served from lib/clacky/web/ directory
+
+    # SkillUiRouter — DSL used by skill UI routes.rb files to register API routes.
+    #
+    # Each skill's ui/routes.rb is evaluated via instance_eval on a SkillUiRouter instance.
+    # Registered routes are stored in the HttpServer's _skill_ui_routes table and matched
+    # on every incoming request after the built-in routes fail to match.
+    #
+    # Usage in skill's ui/routes.rb:
+    #   get("/api/my-skill/items") { |req, res, _| ... }
+    #   post("/api/my-skill/items") { |req, res, _| ... }
+    #   get(%r{^/api/my-skill/items/([^/]+)$}) { |req, res, captures| id = captures[0]; ... }
+    #
+    # The handler block is instance_exec'd on the HttpServer, giving access to all
+    # server helpers: json_response, parse_json_body, build_session, @registry, etc.
+    class SkillUiRouter
+      def initialize(server)
+        @server = server
+      end
+
+      def get(pattern, &block)    = _register("GET",    pattern, block)
+      def post(pattern, &block)   = _register("POST",   pattern, block)
+      def delete(pattern, &block) = _register("DELETE", pattern, block)
+      def patch(pattern, &block)  = _register("PATCH",  pattern, block)
+      def put(pattern, &block)    = _register("PUT",    pattern, block)
+
+      private def _register(method, pattern, block)
+        server = @server
+        # Wrap the block so it is always instance_exec'd on the HttpServer,
+        # regardless of the lexical self where the block was defined.
+        wrapped = proc { |req, res, captures| server.instance_exec(req, res, captures, &block) }
+        @server._skill_ui_routes << { method: method, pattern: pattern, handler: wrapped }
+      end
+    end
+
     class HttpServer
       WEB_ROOT = File.expand_path("../web", __dir__)
 
@@ -165,6 +200,8 @@ module Clacky
         )
         @browser_manager = Clacky::BrowserManager.instance
         @skill_loader    = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.load)
+        # Load skill UI route handlers from each skill's ui/routes.rb (if present).
+        _load_skill_ui_routes
       end
 
       def start
@@ -307,6 +344,7 @@ module Clacky
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
         when ["POST",   "/api/restart"]           then api_restart(req, res)
+        when ["GET",    "/api/ui-extensions"]     then api_list_skill_uis(res)
         else
           if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
@@ -347,6 +385,19 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
             name = URI.decode_www_form_component(path.sub("/api/my-skills/", "").sub("/publish", ""))
             api_publish_my_skill(name, req, res)
+          # ── generic skill UI asset serving ───────────────────────────────
+          elsif method == "GET" && path.match?(%r{^/api/ui-extensions/[^/]+/assets/[^/]+$})
+            # GET /api/ui-extensions/:id/assets/:filename
+            # Serve a skill UI asset file (sidebar.html, panel.html, index.js)
+            parts    = path.split("/")  # ["", "api", "ui-extensions", id, "assets", filename]
+            skill_id = URI.decode_www_form_component(parts[3])
+            filename = URI.decode_www_form_component(parts[5])
+            api_skill_ui_asset(skill_id, filename, res)
+          # ── skill UI registered routes ────────────────────────────────────
+          # Each skill UI may register custom routes via its ui/routes.rb file.
+          # Routes are matched in registration order; first match wins.
+          elsif (handler = _match_skill_ui_route(method, path))
+            handler.call(req, res)
           else
             not_found(res)
           end
@@ -747,6 +798,106 @@ module Clacky
           Clacky::Logger.info("[Restart] exec: #{shell} -l -c #{cmd_string}")
           exec(shell, "-l", "-c", cmd_string)
         end
+      end
+
+      # GET /api/ui-extensions
+      # Returns all UI extensions found in ~/.clacky/skills/*/ui/.
+      # Skills without a ui/ subdirectory are skipped — only skills that ship
+      # a manifest.yml inside ui/ are returned.
+      # Empty array if none found.
+      def api_list_skill_uis(res)
+        loader    = Clacky::UiExtensionLoader.new
+        skill_uis = loader.load_all.map do |p|
+          # Strip internal :dir key — not needed by frontend
+          p.reject { |k, _| k == :dir }
+        end
+        json_response(res, 200, { ui_extensions: skill_uis })
+      end
+
+      # ── Skill UI route registry ───────────────────────────────────────────────
+      #
+      # Skills that ship a UI extension can register custom API routes via a
+      # `routes.rb` file inside their ui/ subdirectory:
+      #   ~/.clacky/skills/<skill-name>/ui/routes.rb
+      #
+      # On server boot, http_server.rb loads each skill's ui/routes.rb using
+      # the SkillUiRouter DSL.
+
+      # Registered skill UI route table: [{ method:, pattern:, handler: }]
+      # Must be public so SkillUiRouter can call @server._skill_ui_routes from outside.
+      public def _skill_ui_routes
+        @_skill_ui_routes ||= []
+      end
+
+      # Called once on boot to load all ui/routes.rb files from skill UI extensions.
+      private def _load_skill_ui_routes
+        loader = Clacky::UiExtensionLoader.new
+        loader.load_all.each do |ext|
+          routes_path = File.join(ext[:dir], "routes.rb")
+          next unless File.exist?(routes_path)
+
+          router = SkillUiRouter.new(self)
+          begin
+            # Evaluate routes.rb with router as self, so DSL methods (get, post,
+            # delete, etc.) are called directly on the SkillUiRouter instance.
+            routes_code = File.read(routes_path)
+            router.instance_eval(routes_code, routes_path)
+          rescue StandardError => e
+            warn "[SkillUiRouter] Failed to load routes for '#{ext[:id]}': #{e.message}"
+          end
+        end
+      end
+
+      # Match an incoming request against registered skill UI routes.
+      # Returns the handler Proc if matched, nil otherwise.
+      private def _match_skill_ui_route(method, path)
+        _skill_ui_routes.each do |route|
+          next unless route[:method] == method
+
+          captures = case route[:pattern]
+                     when String then route[:pattern] == path ? [] : nil
+                     when Regexp
+                       m = path.match(route[:pattern])
+                       m ? m.captures : nil
+                     end
+          return ->(req, res) { route[:handler].call(req, res, captures) } if captures
+        end
+        nil
+      end
+
+      # GET /api/ui-extensions/:id/assets/:filename
+      # Serve a UI extension asset file from ~/.clacky/skills/:id/ui/:filename
+      # (sidebar.html, panel.html, index.js). Only those files are allowed for security.
+      SKILL_UI_ASSET_ALLOWED = %w[sidebar.html panel.html index.js].freeze
+
+      private def api_skill_ui_asset(skill_id, filename, res)
+        unless SKILL_UI_ASSET_ALLOWED.include?(filename)
+          res.status = 403
+          res.body   = "Forbidden"
+          return
+        end
+
+        loader  = Clacky::UiExtensionLoader.new
+        ext     = loader.load_all.find { |e| e[:id] == skill_id }
+        unless ext
+          res.status = 404
+          res.body   = "Skill UI not found"
+          return
+        end
+
+        filepath = File.join(ext[:dir], filename)
+        unless File.exist?(filepath)
+          res.status = 404
+          res.body   = "Asset not found"
+          return
+        end
+
+        content_type = filename.end_with?(".js") ? "application/javascript; charset=utf-8" \
+                                                  : "text/html; charset=utf-8"
+        res.status           = 200
+        res["Content-Type"]  = content_type
+        res["Cache-Control"] = "no-store"
+        res.body             = File.read(filepath)
       end
 
       # Fetch the latest gem version using `gem list -r`, with a 1-hour in-memory cache.
@@ -1703,14 +1854,14 @@ module Clacky
           task.call
           @registry.update(session_id, status: :idle, error: nil)
           broadcast_session_update(session_id)
-          @session_manager.save(agent.to_session_data(status: :success))
+          save_session(session_id, agent, status: :success)
           # Start idle compression timer now that the agent is idle
           idle_timer&.start
         rescue Clacky::AgentInterrupted
           @registry.update(session_id, status: :idle)
           broadcast_session_update(session_id)
           broadcast(session_id, { type: "interrupted", session_id: session_id })
-          @session_manager.save(agent.to_session_data(status: :interrupted))
+          save_session(session_id, agent, status: :interrupted)
         rescue => e
           @registry.update(session_id, status: :error, error: e.message)
           broadcast_session_update(session_id)
@@ -1718,7 +1869,7 @@ module Clacky
           web_ui = nil
           @registry.with_session(session_id) { |s| web_ui = s[:ui] }
           web_ui&.show_error(e.message)
-          @session_manager.save(agent.to_session_data(status: :error, error_message: e.message))
+          save_session(session_id, agent, status: :error, error_message: e.message)
         end
         @registry.with_session(session_id) { |s| s[:thread] = thread }
       end
@@ -1779,9 +1930,9 @@ module Clacky
       # @param working_dir [String] working directory for the agent
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
-      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", source: :manual)
+      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", source: :manual, hidden: false)
         session_id = Clacky::SessionManager.generate_id
-        @registry.create(session_id: session_id)
+        @registry.create(session_id: session_id, hidden: hidden)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
@@ -1809,14 +1960,14 @@ module Clacky
       # Restore a persisted session from saved session_data (from SessionManager).
       # The agent keeps its original session_id so the frontend URL hash stays valid
       # across server restarts.
-      def build_session_from_data(session_data, permission_mode: :confirm_all)
+      def build_session_from_data(session_data, permission_mode: :confirm_all, hidden: false)
         original_id = session_data[:session_id]
 
         # Skip if this session is already registered (e.g., restored by a previous call)
         return nil if @registry.exist?(original_id)
 
         # Register with the original session_id so frontend hashes stay valid
-        @registry.create(session_id: original_id)
+        @registry.create(session_id: original_id, hidden: hidden)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
@@ -1830,13 +1981,36 @@ module Clacky
         agent = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: profile)
         idle_timer = build_idle_timer(original_id, agent)
 
+        # Restore channel_keys (IM platform bindings) persisted in session JSON.
+        # Converts the serialized Array back into a Set so ChannelManager can locate
+        # this session by IM identity after a server restart.
+        persisted_channel_keys = session_data[:channel_keys] || session_data["channel_keys"]
+        channel_keys_set = persisted_channel_keys&.any? ? Set.new(persisted_channel_keys) : nil
+
         @registry.with_session(original_id) do |s|
-          s[:agent]      = agent
-          s[:ui]         = ui
-          s[:idle_timer] = idle_timer
+          s[:agent]        = agent
+          s[:ui]           = ui
+          s[:idle_timer]   = idle_timer
+          s[:channel_keys] = channel_keys_set if channel_keys_set
         end
 
         original_id
+      end
+
+      # Persist a session to disk, including IM channel key bindings so they survive restarts.
+      # Reads channel_keys from the registry and merges them as an Array into session_data
+      # before saving — on restore, build_session_from_data converts them back to a Set.
+      # @param session_id [String]
+      # @param agent      [Clacky::Agent]
+      # @param status     [Symbol]  :success | :interrupted | :error
+      # @param error_message [String, nil]
+      private def save_session(session_id, agent, status: :success, error_message: nil)
+        data = agent.to_session_data(status: status, error_message: error_message)
+        # Attach channel_keys (Set → Array for JSON serialisation)
+        channel_keys = nil
+        @registry.with_session(session_id) { |s| channel_keys = s[:channel_keys]&.to_a }
+        data[:channel_keys] = channel_keys if channel_keys&.any?
+        @session_manager.save(data)
       end
 
       # Build an IdleCompressionTimer for a session.

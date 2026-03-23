@@ -249,14 +249,31 @@ end
 # ── Entry point ────────────────────────────────────────────────────────────────
 if __FILE__ == $0
   if ARGV.empty?
-    puts "Usage: ruby install_from_zip.rb <zip_url_or_path> [skill_name]"
+    puts "Usage: ruby install_from_zip.rb <zip_url_or_path> [skill_name] [--target <dir>]"
     puts "\nExamples:"
     puts "  ruby install_from_zip.rb https://example.com/my-skill-1.0.0.zip"
     puts "  ruby install_from_zip.rb https://example.com/my-skill-1.0.0.zip my-skill"
     puts "  ruby install_from_zip.rb /path/to/my-skill.zip"
     puts "  ruby install_from_zip.rb ~/Downloads/my-skill-1.0.0.zip my-skill"
+    puts "  ruby install_from_zip.rb https://example.com/ui-skill.zip ui-skill --target ~/.clacky/skills"
     exit 1
   end
 
-  ZipSkillInstaller.new(ARGV[0], skill_name: ARGV[1]).install
+  args       = ARGV.dup
+  zip_source = args.shift
+  skill_name = nil
+  target_dir = nil
+
+  # Parse remaining args: [skill_name] [--target <dir>]
+  until args.empty?
+    arg = args.shift
+    if arg == '--target'
+      raw = args.shift
+      target_dir = raw ? File.expand_path(raw) : nil
+    else
+      skill_name = arg
+    end
+  end
+
+  ZipSkillInstaller.new(zip_source, skill_name: skill_name, target_dir: target_dir).install
 end

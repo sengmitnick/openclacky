@@ -4556,7 +4556,53 @@ body.setup-mode[data-theme="dark"] {
   line-height: 1.5;
 }
 
+/* ── Skill UI extension panels ───────────────────────────────────────────── */
 
+/* Panel container — mirrors the flex layout of #chat-panel */
+.ui-panel {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Default placeholder shown when extension has no panel.html */
+.ui-panel-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: var(--color-text-secondary, #8b949e);
+}
+
+.ui-panel-placeholder span {
+  font-size: 48px;
+}
+
+.ui-panel-placeholder h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-text-primary, #c9d1d9);
+  margin: 0;
+}
+
+.ui-panel-placeholder p {
+  font-size: 14px;
+  margin: 0;
+}
+
+/* Sidebar section for skill UI extensions */
+#ui-section {
+  margin-top: 4px;
+}
+
+/* Sidebar entry active state */
+.ui-sidebar-entry.active {
+  background-color: var(--color-bg-tertiary, #21262d);
+  border-radius: 6px;
+}
 
 /* ── Mobile responsive (≤768px) ─────────────────────────────────────────── */
 @media (max-width: 768px) {

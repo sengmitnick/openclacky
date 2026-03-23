@@ -46,7 +46,7 @@ module Clacky
     # Non-blocking — returns immediately (daemon spawn takes ~200ms in background).
     def start
       cfg = load_config
-      unless cfg["enabled"] == true
+      unless cfg["configured"] == true
         Clacky::Logger.info("[BrowserManager] Not enabled — skipping daemon start")
         return
       end
@@ -77,7 +77,7 @@ module Clacky
       cfg = load_config
       @config = cfg
 
-      if cfg["enabled"] == true
+      if cfg["configured"] == true
         Clacky::Logger.info("[BrowserManager] Browser enabled, restarting daemon")
         Thread.new do
           Thread.current.name = "browser-manager-reload"
@@ -91,31 +91,31 @@ module Clacky
     end
 
     # Returns a status hash with real daemon liveness.
-    # @return [Hash] { enabled: bool, daemon_running: bool, chrome_version: String|nil }
+    # @return [Hash] { configured: bool, daemon_running: bool, chrome_version: String|nil }
     def status
-      cfg     = load_config
-      enabled = cfg["enabled"] == true
-      running = @mutex.synchronize { process_alive? }
+      cfg        = load_config
+      configured = cfg["configured"] == true
+      running    = @mutex.synchronize { process_alive? }
       {
-        enabled:        enabled,
+        configured:     configured,
         daemon_running: running,
         chrome_version: cfg["chrome_version"]
       }
     end
 
-    # Toggle the browser tool on/off by flipping `enabled` in browser.yml.
+    # Toggle the browser tool on/off by flipping `configured` in browser.yml.
     # Raises if browser.yml doesn't exist (not yet set up).
-    # @return [Boolean] new enabled state
+    # @return [Boolean] new configured state
     def toggle
       raise "Browser not configured. Run /browser-setup first." unless File.exist?(BROWSER_CONFIG_PATH)
 
-      cfg         = load_config
-      new_enabled = !(cfg["enabled"] == true)
-      cfg["enabled"] = new_enabled
+      cfg            = load_config
+      new_configured = !(cfg["configured"] == true)
+      cfg["configured"] = new_configured
       File.write(BROWSER_CONFIG_PATH, cfg.to_yaml)
       @config = cfg
       reload(force: true)  # user-initiated — skip cooldown
-      new_enabled
+      new_configured
     end
 
     # ---------------------------------------------------------------------------

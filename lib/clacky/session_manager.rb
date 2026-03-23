@@ -80,6 +80,16 @@ module Clacky
       limit ? sessions.first(limit) : sessions
     end
 
+    # Get the most recent session for a specific working directory.
+    def latest_for_directory(working_dir)
+      all_sessions(current_dir: working_dir).first
+    end
+
+    # Get the most recent N sessions for a specific working directory.
+    def latest_n_for_directory(working_dir, n = 5)
+      all_sessions(current_dir: working_dir, limit: n)
+    end
+
     # Delete sessions not accessed within the given number of days (default: 90).
     # Returns count of deleted sessions.
     def cleanup(days: 90)
