@@ -2,6 +2,7 @@
 
 require "securerandom"
 require "json"
+require "cgi"
 require "tty-prompt"
 require "set"
 require_relative "utils/arguments_parser"
@@ -35,14 +36,15 @@ module Clacky
 
     attr_reader :session_id, :name, :history, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
-                :status, :error, :updated_at
+                :status, :error, :updated_at, :source
 
     def permission_mode = @config&.permission_mode&.to_s || ""
 
-    def initialize(client, config, working_dir:, ui:, profile:, session_id:)
+    def initialize(client, config, working_dir:, ui:, profile:, session_id:, source:)
       @client = client  # Client for current model
       @config = config.is_a?(AgentConfig) ? config : AgentConfig.new(config)
       @agent_profile = AgentProfile.load(profile)
+      @source = source.to_sym  # :manual | :cron | :channel
       @tool_registry = ToolRegistry.new
       @hooks = HookManager.new
       @session_id = session_id
@@ -108,7 +110,10 @@ module Clacky
     def self.from_session(client, config, session_data, ui: nil, profile:)
       working_dir = session_data[:working_dir] || session_data["working_dir"] || Dir.pwd
       original_id = session_data[:session_id] || session_data["session_id"] || Clacky::SessionManager.generate_id
-      agent = new(client, config, working_dir: working_dir, ui: ui, profile: profile, session_id: original_id)
+      # Restore source from persisted data; fall back to :manual for legacy sessions
+      source = (session_data[:source] || session_data["source"] || "manual").to_sym
+      agent = new(client, config, working_dir: working_dir, ui: ui, profile: profile,
+                  session_id: original_id, source: source)
       agent.restore_session(session_data)
       agent
     end
@@ -892,7 +897,8 @@ module Clacky
         working_dir: @working_dir,
         ui: @ui,
         profile: @agent_profile.name,
-        session_id: Clacky::SessionManager.generate_id
+        session_id: Clacky::SessionManager.generate_id,
+        source: @source
       )
       subagent.instance_variable_set(:@is_subagent, true)
 
@@ -1138,8 +1144,10 @@ module Clacky
       files = []
       text = content.gsub(/(!?)\[([^\]]*)\]\(file:\/\/([^)]+)\)/) do
         inline = $1 == "!"
-        name   = $2.empty? ? File.basename($3) : $2
-        path   = File.expand_path($3)
+        # URL-decode percent-encoded characters (e.g. Chinese filenames encoded by AI)
+        raw_path = CGI.unescape($3)
+        name   = $2.empty? ? File.basename(raw_path) : $2
+        path   = File.expand_path(raw_path)
         Clacky::Logger.info("[parse_file_links] raw=#{$3.inspect} expanded=#{path.inspect} exist=#{File.exist?(path)}")
         files << { name: name, path: path, inline: inline }
         ""

@@ -103,8 +103,11 @@ module Clacky
       end
 
       # Create new agent if no session loaded
-      agent ||= Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: agent_profile,
-                                   session_id: Clacky::SessionManager.generate_id)
+      if agent.nil?
+        agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: agent_profile,
+                                  session_id: Clacky::SessionManager.generate_id, source: :manual)
+        agent.rename("CLI Session")
+      end
 
       # Change to working directory
       original_dir = Dir.pwd
@@ -314,6 +317,18 @@ module Clacky
         end
       end
 
+      CLI_DEFAULT_SESSION_NAME = "CLI Session"
+
+      # Auto-name a CLI session from the first user message, mirroring server-side logic.
+      # Renames when the agent has no history yet (i.e. first message of the session).
+      private def auto_name_session(agent, input)
+        return unless agent.history.empty?
+
+        auto_name = input.to_s.gsub(/\s+/, " ").strip[0, 30]
+        auto_name += "…" if input.to_s.strip.length > 30
+        agent.rename(auto_name)
+      end
+
       def validate_working_directory(path)
         working_dir = path || Dir.pwd
 
@@ -348,7 +363,7 @@ module Clacky
       def list_sessions
         session_manager = Clacky::SessionManager.new
         working_dir = validate_working_directory(options[:path])
-        sessions = session_manager.list(current_dir: working_dir, limit: 5)
+        sessions = session_manager.all_sessions(current_dir: working_dir, limit: 5)
 
         if sessions.empty?
           say "No sessions found.", :yellow
@@ -379,13 +394,18 @@ module Clacky
           return nil
         end
 
+        # Prefer the agent_profile stored in the session; only fall back to the
+        # CLI --agent flag when the session predates the agent_profile field.
+        restored_profile = session_data[:agent_profile].to_s
+        resolved_profile = restored_profile.empty? ? profile : restored_profile
+
         # Don't print message here - will be shown by UI after banner
-        Clacky::Agent.from_session(client, agent_config, session_data, profile: profile)
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: resolved_profile)
       end
 
       def load_session_by_number(client, agent_config, session_manager, working_dir, identifier, profile:)
         # Get a larger list to search through (for ID prefix matching)
-        sessions = session_manager.list(current_dir: working_dir, limit: 100)
+        sessions = session_manager.all_sessions(current_dir: working_dir, limit: 100)
 
         if sessions.empty?
           say "No sessions found.", :yellow
@@ -426,8 +446,13 @@ module Clacky
           end
         end
 
+        # Prefer the agent_profile stored in the session; fall back to CLI --agent flag
+        # for sessions that predate the agent_profile field.
+        restored_profile = session_data[:agent_profile].to_s
+        resolved_profile = restored_profile.empty? ? profile : restored_profile
+
         # Don't print message here - will be shown by UI after banner
-        Clacky::Agent.from_session(client, agent_config, session_data, profile: profile)
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: resolved_profile)
       end
 
       # Handle agent error/interrupt with cleanup
@@ -467,6 +492,7 @@ module Clacky
         plain_ui = Clacky::PlainUIController.new
         agent.instance_variable_set(:@ui, plain_ui)
 
+        auto_name_session(agent, message)
         agent.run(message, files: files)
         session_manager&.save(agent.to_session_data(status: :success))
         exit(0)
@@ -524,13 +550,14 @@ module Clacky
               break
             when "/clear"
               agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: profile,
-                                        session_id: Clacky::SessionManager.generate_id)
+                                        session_id: Clacky::SessionManager.generate_id, source: :manual)
               agent.instance_variable_set(:@ui, json_ui)
               json_ui.emit("info", message: "Session cleared. Starting fresh.")
               next
             end
 
             files = input["files"] || []
+            auto_name_session(agent, content)
             run_json_task(agent, json_ui, session_manager) { agent.run(content, files: files) }
           when "exit"
             break
@@ -667,7 +694,7 @@ module Clacky
             # Clear output area
             ui_controller.layout.clear_output
             # Clear session by creating a new agent
-            agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id)
+            agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id, source: :manual)
             ui_controller.show_info("Session cleared. Starting fresh.")
             # Update session bar with reset values
             ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
@@ -692,6 +719,8 @@ module Clacky
 
           # Cancel idle timer if running (new input means user is active)
           idle_timer.cancel
+
+          auto_name_session(agent, input)
 
           # Run agent in background thread
           current_task_thread = Thread.new do
