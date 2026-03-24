@@ -105,7 +105,7 @@ USE_CN_MIRRORS=false
 DEFAULT_RUBYGEMS_URL="https://rubygems.org"
 GITHUB_RAW_BASE_URL="https://raw.githubusercontent.com"
 HOMEBREW_INSTALL_SCRIPT_URL="${GITHUB_RAW_BASE_URL}/Homebrew/install/HEAD/install.sh"
-OPENCLACKY_INSTALL_SCRIPT_URL="${GITHUB_RAW_BASE_URL}/clacky-ai/open-clacky/main/scripts/install.sh"
+OPENCLACKY_INSTALL_SCRIPT_URL="${GITHUB_RAW_BASE_URL}/clacky-ai/openclacky/main/scripts/install.sh"
 TUNA_MIRROR_BASE_URL="https://mirrors.tuna.tsinghua.edu.cn"
 CN_CDN_BASE_URL="https://oss.1024code.com"
 DEFAULT_MISE_INSTALL_URL="https://mise.run"
@@ -671,7 +671,7 @@ main() {
             # User declined or installation failed
             print_info "Ruby installation was not completed"
             print_info "Please install Ruby manually and run: gem install openclacky"
-            print_info "For more information, visit: https://github.com/clacky-ai/open-clacky"
+            print_info "For more information, visit: https://github.com/clacky-ai/openclacky"
             exit 1
         fi
     else
@@ -679,7 +679,7 @@ main() {
         echo ""
         suggest_ruby_installation
         echo ""
-        print_info "For more information, visit: https://github.com/clacky-ai/open-clacky"
+        print_info "For more information, visit: https://github.com/clacky-ai/openclacky"
         exit 1
     fi
 }
