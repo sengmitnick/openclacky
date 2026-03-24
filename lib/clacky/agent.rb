@@ -117,10 +117,16 @@ module Clacky
       @hooks.add(event, &block)
     end
 
-    # Switch to a different model by name
-    # Returns true if switched, false if model not found
-    def switch_model(model_name)
-      if @config.switch_model(model_name)
+    # Handle /model slash command and return a response string.
+    # Delegates parsing to AgentConfig#handle_model_command, then re-creates
+    # the Client if a switch actually happened.
+    #
+    # @param arg [String, nil] the argument after /model (nil or blank = list)
+    # @return [String] human-readable response for any channel
+    def handle_model_command(arg = nil)
+      response, switched_idx = @config.handle_model_command(arg)
+
+      if switched_idx
         # Re-create client for new model
         @client = Clacky::Client.new(
           @config.api_key,
@@ -129,10 +135,25 @@ module Clacky
         )
         # Update message compressor with new client and model
         @message_compressor = MessageCompressor.new(@client, model: current_model)
-        true
-      else
-        false
       end
+
+      response
+    end
+
+    # Switch to a different model by 0-based index.
+    # Returns true if switched, false if index out of range.
+    def switch_model(index)
+      return false unless @config.switch_model(index)
+
+      # Re-create client for new model
+      @client = Clacky::Client.new(
+        @config.api_key,
+        base_url: @config.base_url,
+        anthropic_format: @config.anthropic_format?
+      )
+      # Update message compressor with new client and model
+      @message_compressor = MessageCompressor.new(@client, model: current_model)
+      true
     end
 
     # Get list of available model names

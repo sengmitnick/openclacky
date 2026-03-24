@@ -273,10 +273,28 @@ module Clacky
         when "/list"
           list_sessions(adapter, chat_id)
 
+        when /\A\/model(?:\s+(.*))?\z/i
+          arg = Regexp.last_match(1)
+          session_id = resolve_session(event)
+          unless session_id
+            adapter.send_text(chat_id, "No session bound. Send any message first to create a session.")
+            return
+          end
+          agent = nil
+          @registry.with_session(session_id) { |s| agent = s[:agent] }
+          unless agent
+            adapter.send_text(chat_id, "Session not ready yet.")
+            return
+          end
+          response = agent.handle_model_command(arg)
+          adapter.send_text(chat_id, response)
+
         else
           adapter.send_text(chat_id,
             "Commands:\n" \
             "  /new - start a new session\n" \
+            "  /model - list available models\n" \
+            "  /model <n|alias> - switch model\n" \
             "  /bind <n|session_id> - switch to a session (use /list to see numbers)\n" \
             "  /unbind - remove binding\n" \
             "  /stop - interrupt current task\n" \

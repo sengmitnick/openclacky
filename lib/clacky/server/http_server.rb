@@ -1681,6 +1681,16 @@ module Clacky
         @registry.with_session(session_id) { |s| web_ui = s[:ui] }
         web_ui&.show_user_message(content, source: :web)
 
+        # Handle /model slash command before passing to agent
+        if content.strip =~ /\A\/model(?:\s+(.*))?\z/i
+          arg = Regexp.last_match(1)
+          response = agent.handle_model_command(arg)
+          web_ui&.show_assistant_message(response, files: [])
+          broadcast(session_id, { type: "model_switched", session_id: session_id,
+                                   model_info: agent.current_model_info })
+          return
+        end
+
         # File references are now handled inside agent.run — injected as a system_injected
         # message after the user message, so replay_history skips them automatically.
         run_agent_task(session_id, agent) { agent.run(content, files: files) }
