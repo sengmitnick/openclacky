@@ -578,6 +578,142 @@ RSpec.describe Clacky::AgentConfig do
     end
   end
 
+  describe "#handle_model_command" do
+    let(:models) do
+      [
+        { "model" => "claude-opus-4-5",          "type" => "default", "api_key" => "k1", "base_url" => "https://a.test" },
+        { "model" => "openai/gpt-4o",             "api_key" => "k2",   "base_url" => "https://b.test" },
+        { "model" => "anthropic/claude-3.5-haiku", "alias" => "haiku",  "api_key" => "k3", "base_url" => "https://c.test" }
+      ]
+    end
+    let(:config) { described_class.new(models: models) }
+
+    context "with no argument (list)" do
+      it "returns a list of all models" do
+        response, switched = config.handle_model_command(nil)
+        expect(switched).to be_nil
+        expect(response).to include("claude-opus-4-5")
+        expect(response).to include("openai/gpt-4o")
+        expect(response).to include("haiku")
+        expect(response).to include("◀ current")
+      end
+
+      it "returns a list when arg is blank" do
+        response, switched = config.handle_model_command("  ")
+        expect(switched).to be_nil
+        expect(response).to include("Available models")
+      end
+    end
+
+    context "with numeric index" do
+      it "switches by 1-based index" do
+        response, switched = config.handle_model_command("2")
+        expect(switched).to eq(1)
+        expect(response).to include("✅")
+        expect(config.models[1]["type"]).to eq("default")
+      end
+
+      it "returns error for out-of-range index" do
+        response, switched = config.handle_model_command("99")
+        expect(switched).to be_nil
+        expect(response).to include("not found")
+      end
+    end
+
+    context "with alias" do
+      it "switches by alias" do
+        response, switched = config.handle_model_command("haiku")
+        expect(switched).to eq(2)
+        expect(response).to include("✅")
+        expect(config.models[2]["type"]).to eq("default")
+      end
+
+      it "is case-insensitive" do
+        response, switched = config.handle_model_command("HAIKU")
+        expect(switched).to eq(2)
+        expect(response).to include("✅")
+      end
+    end
+
+    context "with partial model id" do
+      it "switches by partial model id match" do
+        response, switched = config.handle_model_command("gpt-4o")
+        expect(switched).to eq(1)
+        expect(response).to include("✅")
+      end
+    end
+
+    context "with unknown arg" do
+      it "returns not-found message" do
+        response, switched = config.handle_model_command("no-such-model")
+        expect(switched).to be_nil
+        expect(response).to include("not found")
+      end
+    end
+  end
+
+  describe "providers: format" do
+    let(:providers_data) do
+      {
+        "providers" => [
+          {
+            "name"             => "openrouter",
+            "api_key"          => "sk-or",
+            "base_url"         => "https://openrouter.ai/api/v1",
+            "anthropic_format" => false,
+            "models"           => [
+              { "id" => "anthropic/claude-3.5-sonnet", "alias" => "sonnet", "type" => "default" },
+              { "id" => "openai/gpt-4o" }
+            ]
+          },
+          {
+            "name"             => "anthropic",
+            "api_key"          => "sk-ant",
+            "base_url"         => "https://api.anthropic.com",
+            "anthropic_format" => true,
+            "models"           => [
+              { "id" => "claude-opus-4-5", "type" => "lite" }
+            ]
+          }
+        ]
+      }
+    end
+
+    it "parses providers: format into flat models with provider metadata" do
+      with_temp_config(providers_data) do |config_file|
+        config = described_class.load(config_file)
+        expect(config.models.length).to eq(3)
+
+        sonnet = config.models[0]
+        expect(sonnet["model"]).to eq("anthropic/claude-3.5-sonnet")
+        expect(sonnet["alias"]).to eq("sonnet")
+        expect(sonnet["type"]).to eq("default")
+        expect(sonnet["api_key"]).to eq("sk-or")
+        expect(sonnet["base_url"]).to eq("https://openrouter.ai/api/v1")
+        expect(sonnet["provider"]).to eq("openrouter")
+
+        opus = config.models[2]
+        expect(opus["model"]).to eq("claude-opus-4-5")
+        expect(opus["api_key"]).to eq("sk-ant")
+        expect(opus["anthropic_format"]).to be true
+        expect(opus["provider"]).to eq("anthropic")
+      end
+    end
+
+    it "serializes back to providers: format when provider metadata exists" do
+      with_temp_config(providers_data) do |config_file|
+        config = described_class.load(config_file)
+        yaml_out = config.to_yaml
+        parsed = YAML.safe_load(yaml_out)
+        expect(parsed).to have_key("providers")
+        expect(parsed["providers"].length).to eq(2)
+
+        or_provider = parsed["providers"].find { |p| p["name"] == "openrouter" }
+        expect(or_provider["models"].map { |m| m["id"] }).to include("anthropic/claude-3.5-sonnet", "openai/gpt-4o")
+      end
+    end
+  end
+
   describe "ClackyEnv environment variables" do
     describe "default model" do
       it "loads from CLACKY_XXX env vars when config is empty" do

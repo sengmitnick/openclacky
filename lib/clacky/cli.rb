@@ -545,6 +545,13 @@ module Clacky
             end
 
             # Handle built-in commands
+            if content =~ /\A\/model(?:\s+(.*))?\z/i
+              arg = Regexp.last_match(1)
+              response = agent.handle_model_command(arg)
+              json_ui.emit("info", message: response)
+              next
+            end
+
             case content.downcase
             when "/exit", "/quit"
               break
@@ -682,6 +689,14 @@ module Clacky
         # Set up input handler
         ui_controller.on_input do |input, files, display: nil|
           # Handle commands
+          case input.strip
+          when /\A\/model(?:\s+(.*))?\z/i
+            arg = Regexp.last_match(1)
+            response = agent.handle_model_command(arg)
+            ui_controller.show_info(response)
+            next
+          end
+
           case input.downcase.strip
           when "/config"
             handle_config_command(ui_controller, client, agent_config, agent)

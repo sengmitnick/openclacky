@@ -15,6 +15,60 @@ It provides chat functionality and autonomous AI agent capabilities with tool us
 - `spec/` - RSpec test suite
 - `clacky.gemspec` - Gem specification
 
+## ⚠️ DEVELOPMENT WORKFLOW (CRITICAL — READ FIRST)
+
+### Repository Layout
+- **Main worktree**: `/Users/zhangrunsheng/.openclaw/workspace/projects/openclacky-code/openclacky`
+  - Always on **`dev` branch**
+  - This is the **verification branch** — the running server (`http://127.0.0.1:7070`) runs from here
+  - **DO NOT modify files here. DO NOT commit here.**
+- **Linked worktrees**: created automatically at `.clacky-worktrees/<uuid>/` or `~/clacky_workspace/worktrees/<uuid>/`
+  - Each task gets its own worktree on a feature branch
+  - All development happens here
+
+### Correct Development Flow
+
+```
+1. Create task at http://127.0.0.1:7070/#ui/workspace/
+   → Clacky creates a linked worktree automatically
+
+2. Work in the worktree (edit files, write code)
+   → path: .clacky-worktrees/<uuid>/ or ~/clacky_workspace/worktrees/<uuid>/
+
+3. Commit in the worktree branch (NOT dev)
+   → git add / git commit
+
+4. Merge into dev (in the main worktree or via git)
+   → cd <main-worktree> && git merge <feature-branch>
+
+5. Restart server to pick up changes
+   → kill the running process, re-run from main worktree on dev branch
+
+6. Verify at http://127.0.0.1:7070
+```
+
+### ⛔ HARD RULE: Never commit directly to `dev`
+- A `pre-commit` Git hook is installed that **blocks all commits on `dev`** in the main worktree
+- This applies to AI (Clacky) and humans alike
+- If you see: `BLOCKED: Direct commit to 'dev' is not allowed` → you are in the wrong place
+- Emergency bypass only: `git commit --no-verify` (use sparingly, document why)
+
+### How to identify which worktree you're in
+```bash
+git rev-parse --show-toplevel   # shows current worktree path
+git branch --show-current       # shows current branch
+```
+If the path is the main worktree AND branch is `dev` → stop, do not modify files.
+
+### Merging worktree changes into dev
+```bash
+# In main worktree (dev branch):
+cd /Users/zhangrunsheng/.openclaw/workspace/projects/openclacky-code/openclacky
+git merge <feature-branch>      # fast-forward if no conflicts
+```
+
+---
+
 ## Development Guidelines
 
 ### Code Style

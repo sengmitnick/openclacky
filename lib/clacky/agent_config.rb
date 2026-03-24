@@ -176,6 +176,15 @@ module Clacky
         data = nil
       end
 
+      # Migrate old flat-array or legacy Hash formats to providers: format.
+      # Old format = Array at top level, or Hash without "providers" key.
+      # Backs up the original file before overwriting so the user can recover it.
+      if data && !(data.is_a?(Hash) && data["providers"])
+        migrate_config_format(config_file, data)
+        # Reload after migration
+        data = File.exist?(config_file) ? YAML.load_file(config_file) : data
+      end
+
       # Parse models from config
       models = parse_models(data)
 
@@ -243,9 +252,53 @@ module Clacky
       FileUtils.chmod(0o600, config_file)
     end
 
-    # Convert to YAML format (top-level array)
+    # Convert to YAML format.
+    # If models carry "provider" metadata (loaded from providers: format), serialize back
+    # into the provider→model two-layer structure.  Otherwise fall back to the flat array.
     def to_yaml
-      YAML.dump(@models)
+      if @models.any? { |m| m["provider"] }
+        YAML.dump(to_providers_hash)
+      else
+        YAML.dump(@models)
+      end
+    end
+
+    # Build the providers: Hash structure from flat @models array.
+    # Groups models by (provider name + api_key + base_url + anthropic_format).
+    private def to_providers_hash
+      providers = []
+      grouped = {}
+      group_order = []
+
+      @models.each do |m|
+        key = [m["provider"] || "", m["api_key"] || "", m["base_url"] || "", m["anthropic_format"]]
+        unless grouped.key?(key)
+          grouped[key] = []
+          group_order << key
+        end
+        grouped[key] << m
+      end
+
+      group_order.each do |key|
+        provider_name, api_key, base_url, anthropic_format = key
+        model_entries = grouped[key].map do |m|
+          entry = { "id" => m["model"] }
+          entry["alias"] = m["alias"] if m["alias"]
+          entry["type"]  = m["type"]  if m["type"]
+          entry
+        end
+        p = {
+          "name"             => provider_name,
+          "api_key"          => api_key,
+          "base_url"         => base_url,
+          "anthropic_format" => anthropic_format,
+          "models"           => model_entries
+        }
+        p.delete("name") if provider_name.empty?
+        providers << p
+      end
+
+      { "providers" => providers }
     end
 
     # Check if any model is configured
@@ -395,6 +448,55 @@ module Clacky
       true
     end
 
+    # Handle /model slash command — parse arg and switch model or list models.
+    # Returns a human-readable response string suitable for any channel.
+    #
+    # Usage:
+    #   /model           → list all models with current marker
+    #   /model <index>   → switch by 1-based index (e.g. /model 2)
+    #   /model <alias>   → switch by alias (e.g. /model sonnet)
+    #   /model <id>      → switch by partial model id match (e.g. /model gpt-4o)
+    #
+    # Returns [response_text, switched_index_or_nil]
+    # switched_index_or_nil is the 0-based index of the newly active model, or nil if not switched.
+    def handle_model_command(arg = nil)
+      if arg.nil? || arg.strip.empty?
+        return [list_models_text, nil]
+      end
+
+      arg = arg.strip
+
+      # Try 1-based numeric index first
+      if arg =~ /\A\d+\z/
+        idx = arg.to_i - 1
+        if idx < 0 || idx >= @models.length
+          return ["Model ##{arg} not found. Use /model to list available models.", nil]
+        end
+        if switch_model(idx)
+          m = @models[idx]
+          name = model_display_name(m)
+          return ["✅ Switched to **#{name}**", idx]
+        end
+      end
+
+      # Try alias or partial model id match (case-insensitive)
+      matched_idx = @models.each_with_index.find do |m, _i|
+        alias_match = m["alias"] && m["alias"].downcase == arg.downcase
+        id_match    = m["model"] && m["model"].downcase.include?(arg.downcase)
+        alias_match || id_match
+      end&.last
+
+      if matched_idx
+        if switch_model(matched_idx)
+          m = @models[matched_idx]
+          name = model_display_name(m)
+          return ["✅ Switched to **#{name}**", matched_idx]
+        end
+      end
+
+      ["Model '#{arg}' not found. Use /model to list available models.", nil]
+    end
+
     # Remove a model by index
     # Returns true if removed, false if index out of range or it's the last model
     def remove_model(index)
@@ -412,6 +514,27 @@ module Clacky
       true
     end
 
+    # Format list of all models as human-readable text
+    private def list_models_text
+      if @models.empty?
+        return "No models configured. Use `clacky config set` to add models."
+      end
+
+      lines = ["Available models:"]
+      @models.each_with_index do |m, i|
+        active  = (m["type"] == "default") ? " ◀ current" : ""
+        alias_s = m["alias"] ? " (#{m["alias"]})" : ""
+        lines << "  #{i + 1}. #{m["model"]}#{alias_s}#{active}"
+      end
+      lines << "\nUsage: /model <number|alias|model_id>"
+      lines.join("\n")
+    end
+
+    # Short display name for a model entry
+    private def model_display_name(m)
+      m["alias"] || m["model"] || "(unknown)"
+    end
+
     private def validate_permission_mode(mode)
       mode ||= :confirm_safes
       mode = mode.to_sym
@@ -423,13 +546,134 @@ module Clacky
       mode
     end
 
-    # Parse models from config data
-    # Supports new top-level array format and old formats for backward compatibility
+    # Migrate old config format to new providers: format.
+    # Creates a backup at config_file + ".bak.<timestamp>" before writing.
+    # Only runs once — subsequent loads will see the providers: key and skip this.
+    private_class_method def self.migrate_config_format(config_file, data)
+      return unless File.exist?(config_file)
+
+      # Parse models from the old data using the legacy parsers below
+      flat_models = parse_models_legacy(data)
+      return if flat_models.empty?
+
+      # Build providers: structure by grouping on api_key + base_url
+      providers = []
+      grouped = {}
+      group_order = []
+
+      flat_models.each do |m|
+        key = [m["api_key"].to_s, m["base_url"].to_s, m["anthropic_format"]]
+        unless grouped.key?(key)
+          grouped[key] = []
+          group_order << key
+        end
+        grouped[key] << m
+      end
+
+      group_order.each_with_index do |key, idx|
+        api_key, base_url, anthropic_format = key
+        model_entries = grouped[key].map do |m|
+          entry = { "id" => (m["model"] || m["name"]).to_s }
+          entry["alias"] = m["alias"] if m["alias"]
+          entry["type"]  = m["type"]  if m["type"]
+          entry
+        end
+        providers << {
+          "name"             => "provider_#{idx + 1}",
+          "api_key"          => api_key,
+          "base_url"         => base_url,
+          "anthropic_format" => anthropic_format || false,
+          "models"           => model_entries
+        }
+      end
+
+      new_data = { "providers" => providers }
+
+      # Backup old file
+      timestamp = Time.now.strftime("%Y%m%d%H%M%S")
+      backup_path = "#{config_file}.bak.#{timestamp}"
+      FileUtils.cp(config_file, backup_path)
+      Clacky::Logger.info("[AgentConfig] Migrated config to providers: format. Backup: #{backup_path}")
+
+      # Write new format
+      File.write(config_file, YAML.dump(new_data))
+      FileUtils.chmod(0o600, config_file)
+    rescue => e
+      Clacky::Logger.warn("[AgentConfig] Config migration failed: #{e.message}. Continuing with old format.")
+    end
+
+    # Legacy parser used ONLY during migration — parses old flat/hash formats into a flat array.
+    private_class_method def self.parse_models_legacy(data)
+      models = []
+      return models if data.nil?
+
+      if data.is_a?(Array)
+        models = data.map do |m|
+          m = m.dup
+          if m["name"] && !m["model"]
+            m["model"] = m["name"]
+            m.delete("name")
+          end
+          m
+        end
+      elsif data.is_a?(Hash) && data["models"]
+        if data["models"].is_a?(Array)
+          models = data["models"].map do |m|
+            m = m.dup
+            if m["name"] && !m["model"]
+              m["model"] = m["name"]
+              m.delete("name")
+            end
+            m
+          end
+        end
+      elsif data.is_a?(Hash) && data["api_key"]
+        models << {
+          "api_key"          => data["api_key"],
+          "base_url"         => data["base_url"],
+          "model"            => data["model"] || CLAUDE_DEFAULT_MODEL,
+          "anthropic_format" => data["anthropic_format"] || false
+        }
+      end
+
+      models
+    end
+
+    # Parse models from config data.
+    # Supports three formats (newest first):
+    #   1. providers: format  — Hash with "providers" key (NEW)
+    #   2. Top-level array    — Array of flat model entries  (current)
+    #   3. Hash with "models" — Old nested format  (legacy)
+    #   4. Single-model Hash  — Very old format  (legacy)
     private_class_method def self.parse_models(data)
       models = []
 
       # Handle nil or empty data
       return models if data.nil?
+
+      # --- NEW: providers: format ---
+      if data.is_a?(Hash) && data["providers"]
+        data["providers"].each do |provider|
+          provider_name     = provider["name"].to_s
+          api_key           = provider["api_key"].to_s
+          base_url          = provider["base_url"].to_s
+          anthropic_format  = provider["anthropic_format"] || false
+
+          (provider["models"] || []).each do |m|
+            entry = {
+              "model"           => m["id"].to_s,
+              "api_key"         => api_key,
+              "base_url"        => base_url,
+              "anthropic_format"=> anthropic_format,
+              "provider"        => provider_name
+            }
+            entry["alias"] = m["alias"]   if m["alias"]
+            entry["type"]  = m["type"]    if m["type"]
+            models << entry
+          end
+        end
+        return models
+      end
 
       if data.is_a?(Array)
         # New format: top-level array of model configurations
