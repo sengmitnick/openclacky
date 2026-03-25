@@ -14,7 +14,7 @@ module Clacky
     #   6. Skills context                   (available skills list)
     module SystemPromptBuilder
       # Max characters loaded from each agent file (SOUL.md / USER.md)
-      MAX_MEMORY_FILE_CHARS = 1000
+      MAX_MEMORY_FILE_CHARS = 4000
 
       # Build complete system prompt with project rules and skills
       # @return [String] Complete system prompt
