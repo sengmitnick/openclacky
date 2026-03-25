@@ -135,12 +135,14 @@ module Clacky
         - 将大目标拆解为可执行的小步骤
       MD
 
-      def initialize(host: "127.0.0.1", port: 7070, agent_config:, client_factory:, brand_test: false, sessions_dir: nil)
+      def initialize(host: "127.0.0.1", port: 7070, agent_config:, client_factory:, brand_test: false, sessions_dir: nil, socket: nil, master_pid: nil)
         @host           = host
         @port           = port
         @agent_config   = agent_config
         @client_factory = client_factory  # callable: -> { Clacky::Client.new(...) }
         @brand_test     = brand_test      # when true, skip remote API calls for license activation
+        @inherited_socket = socket        # TCPServer socket passed from Master (nil = standalone mode)
+        @master_pid       = master_pid    # Master PID so we can send USR1 on upgrade/restart
         # Capture the absolute path of the entry script and original ARGV at startup,
         # so api_restart can re-exec the correct binary even if cwd changes later.
         @restart_script = File.expand_path($0)
@@ -150,7 +152,8 @@ module Clacky
           session_manager:  @session_manager,
           session_restorer: method(:build_session_from_data)
         )
-        @ws_clients      = {}  # session_id => [WebSocketConnection, ...]
+        @ws_clients      = {}   # session_id => [WebSocketConnection, ...]
+        @all_ws_conns    = []   # every connected WS client, regardless of session subscription
         @ws_mutex        = Mutex.new
         # Version cache: { latest: "x.y.z", checked_at: Time }
         @version_cache   = nil
@@ -176,11 +179,16 @@ module Clacky
         # Enable console logging for the server process so log lines are visible in the terminal.
         Clacky::Logger.console = true
 
-        # Kill any previous server on the same port, then write our own PID file
-        kill_existing_server(@port)
-        pid_file = File.join(Dir.tmpdir, "clacky-server-#{@port}.pid")
-        File.write(pid_file, Process.pid.to_s)
-        at_exit { File.delete(pid_file) if File.exist?(pid_file) }
+        Clacky::Logger.info("[HttpServer PID=#{Process.pid}] start() mode=#{@inherited_socket ? 'worker' : 'standalone'} inherited_socket=#{@inherited_socket.inspect} master_pid=#{@master_pid.inspect}")
+
+        # In standalone mode (no master), kill any stale server and manage our own PID file.
+        # In worker mode the master owns the PID file; we just skip this block.
+        if @inherited_socket.nil?
+          kill_existing_server(@port)
+          pid_file = File.join(Dir.tmpdir, "clacky-server-#{@port}.pid")
+          File.write(pid_file, Process.pid.to_s)
+          at_exit { File.delete(pid_file) if File.exist?(pid_file) }
+        end
 
         # Expose server address and brand name to all child processes (skill scripts, shell commands, etc.)
         # so they can call back into the server without hardcoding the port,
@@ -193,13 +201,43 @@ module Clacky
         # Override WEBrick's built-in signal traps via StartCallback,
         # which fires after WEBrick sets its own INT/TERM handlers.
         # This ensures Ctrl-C always exits immediately.
-        server = WEBrick::HTTPServer.new(
-          BindAddress:     @host,
-          Port:            @port,
-          Logger:          WEBrick::Log.new(File::NULL),
-          AccessLog:       [],
-          StartCallback:   proc { trap("INT") { exit(0) }; trap("TERM") { exit(0) } }
-        )
+        #
+        # When running as a worker under Master, DoNotListen: true prevents WEBrick
+        # from calling bind() on its own — we inject the inherited socket instead.
+        webrick_opts = {
+          BindAddress:   @host,
+          Port:          @port,
+          Logger:        WEBrick::Log.new(File::NULL),
+          AccessLog:     [],
+          StartCallback: proc { }  # signal traps set below, after `server` is created
+        }
+        webrick_opts[:DoNotListen] = true if @inherited_socket
+        Clacky::Logger.info("[HttpServer PID=#{Process.pid}] WEBrick DoNotListen=#{webrick_opts[:DoNotListen].inspect}")
+
+        server = WEBrick::HTTPServer.new(**webrick_opts)
+
+        # Override WEBrick's signal traps now that `server` is available.
+        # On INT/TERM: call server.shutdown (graceful), with a 3s hard-kill fallback.
+        shutdown_once = false
+        shutdown_proc = proc do
+          next if shutdown_once
+          shutdown_once = true
+          Thread.new do
+            sleep 1
+            Clacky::Logger.warn("[HttpServer] Forced exit after graceful shutdown timeout.")
+            exit!(0)
+          end
+          server.shutdown rescue nil
+        end
+        trap("INT")  { shutdown_proc.call }
+        trap("TERM") { shutdown_proc.call }
+
+        if @inherited_socket
+          server.listeners << @inherited_socket
+          Clacky::Logger.info("[HttpServer PID=#{Process.pid}] injected inherited fd=#{@inherited_socket.fileno} listeners=#{server.listeners.map(&:fileno).inspect}")
+        else
+          Clacky::Logger.info("[HttpServer PID=#{Process.pid}] standalone, WEBrick listeners=#{server.listeners.map(&:fileno).inspect}")
+        end
 
         # Mount API + WebSocket handler (takes priority).
         # Use a custom Servlet so that DELETE/PUT/PATCH requests are not rejected
@@ -242,15 +280,6 @@ module Clacky
             res["Pragma"]        = "no-cache"
           end
         end
-
-        banner = Clacky::Banner.new
-        puts ""
-        puts banner.colored_cli_logo
-        puts banner.colored_tagline
-        puts ""
-        puts "   Web UI: #{banner.highlight("http://#{@host}:#{@port}")}"
-        puts "   Version: #{Clacky::VERSION}"
-        puts "   Press Ctrl-C to stop."
 
         # Auto-create a default session on startup
         create_default_session
@@ -403,6 +432,7 @@ module Clacky
         FileUtils.mkdir_p(working_dir)
 
         session_id = build_session(name: name, working_dir: working_dir, profile: profile, source: source)
+        broadcast_session_update(session_id)
         json_response(res, 201, { session: @registry.session_summary(session_id) })
       end
 
@@ -728,24 +758,35 @@ module Clacky
 
         Thread.new do
           begin
+            Clacky::Logger.info("[Upgrade] Starting: gem update openclacky --no-document")
             broadcast_all(type: "upgrade_log", line: "Starting upgrade: gem update openclacky --no-document\n")
 
             shell  = Clacky::Tools::Shell.new
+            Clacky::Logger.info("[Upgrade] Calling shell.execute...")
             result = shell.execute(command: "gem update openclacky --no-document",
-                                   soft_timeout: 300, hard_timeout: 600)
+                                   soft_timeout: 30, hard_timeout: 300)
+            Clacky::Logger.info("[Upgrade] shell.execute returned: exit_code=#{result[:exit_code]}")
+            Clacky::Logger.info("[Upgrade] stdout=#{result[:stdout].to_s.slice(0, 500)}")
+            Clacky::Logger.info("[Upgrade] stderr=#{result[:stderr].to_s.slice(0, 500)}")
+
             output  = [result[:stdout], result[:stderr]].join
             success = result[:exit_code] == 0
 
+            clients_count = @ws_mutex.synchronize { @all_ws_conns.size }
+            Clacky::Logger.info("[Upgrade] Broadcasting output to #{clients_count} WS client(s)")
             broadcast_all(type: "upgrade_log", line: output)
 
             if success
+              Clacky::Logger.info("[Upgrade] Success!")
               broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Please restart the server to apply the new version.\n")
               broadcast_all(type: "upgrade_complete", success: true)
             else
+              Clacky::Logger.warn("[Upgrade] Failed. exit_code=#{result[:exit_code]}")
               broadcast_all(type: "upgrade_log", line: "\n✗ Upgrade failed. Please try manually: gem update openclacky\n")
               broadcast_all(type: "upgrade_complete", success: false)
             end
           rescue StandardError => e
+            Clacky::Logger.error("[Upgrade] Exception: #{e.class}: #{e.message}\n#{e.backtrace.first(5).join("\n")}")
             broadcast_all(type: "upgrade_log", line: "\n✗ Error during upgrade: #{e.message}\n")
             broadcast_all(type: "upgrade_complete", success: false)
           end
@@ -759,22 +800,36 @@ module Clacky
       def api_restart(req, res)
         json_response(res, 200, { ok: true, message: "Restarting…" })
 
-        script = @restart_script
-        argv   = @restart_argv
         Thread.new do
           sleep 0.5  # Let WEBrick flush the HTTP response
 
-          # Use login shell to re-exec so rbenv/mise shims resolve the newly installed gem version.
-          # Direct `exec(RbConfig.ruby, script, *argv)` would reuse the old Ruby interpreter path
-          # and miss gem updates installed under a different Ruby version managed by rbenv/mise.
-          shell      = ENV["SHELL"].to_s
-          shell      = "/bin/bash" if shell.empty?
-          cmd_parts  = [Shellwords.escape(script), *argv.map { |a| Shellwords.escape(a) }]
-          cmd_string = cmd_parts.join(" ")
-
-          Clacky::Logger.info("[Restart] exec: #{shell} -l -c #{cmd_string}")
-          exec(shell, "-l", "-c", cmd_string)
+          if @master_pid
+            # Worker mode: tell master to hot-restart, then exit cleanly.
+            Clacky::Logger.info("[Restart] Sending USR1 to master (PID=#{@master_pid})")
+            begin
+              Process.kill("USR1", @master_pid)
+            rescue Errno::ESRCH
+              Clacky::Logger.warn("[Restart] Master PID=#{@master_pid} not found, falling back to exec.")
+              standalone_exec_restart
+            end
+            exit(0)
+          else
+            # Standalone mode (no master): fall back to the original exec approach.
+            standalone_exec_restart
+          end
         end
+      end
+
+      # Re-exec the current process via a login shell (rbenv/mise shim compatible).
+      private def standalone_exec_restart
+        script     = @restart_script
+        argv       = @restart_argv
+        shell      = ENV["SHELL"].to_s
+        shell      = "/bin/bash" if shell.empty?
+        cmd_parts  = [Shellwords.escape(script), *argv.map { |a| Shellwords.escape(a) }]
+        cmd_string = cmd_parts.join(" ")
+        Clacky::Logger.info("[Restart] exec: #{shell} -l -c #{cmd_string}")
+        exec(shell, "-l", "-c", cmd_string)
       end
 
       # Fetch the latest gem version using `gem list -r`, with a 1-hour in-memory cache.
@@ -1578,6 +1633,7 @@ module Clacky
       end
 
       def on_ws_open(conn)
+        @ws_mutex.synchronize { @all_ws_conns << conn }
         # Client will send a "subscribe" message to bind to a session
       end
 
@@ -1651,6 +1707,7 @@ module Clacky
       end
 
       def on_ws_close(conn)
+        @ws_mutex.synchronize { @all_ws_conns.delete(conn) }
         unsubscribe(conn)
       end
 
@@ -1792,9 +1849,9 @@ module Clacky
         clients.each { |conn| conn.send_json(event) rescue nil }
       end
 
-      # Broadcast an event to every connected client.
+      # Broadcast an event to every connected client (regardless of session subscription).
       def broadcast_all(event)
-        clients = @ws_mutex.synchronize { @ws_clients.values.flatten.uniq }
+        clients = @ws_mutex.synchronize { @all_ws_conns.dup }
         clients.each { |conn| conn.send_json(event) rescue nil }
       end
 

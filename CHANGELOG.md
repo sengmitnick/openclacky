@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-03-24
+
+### Added
+- **One-click gem upgrade in Web UI**: a new "Upgrade" button in the Web UI lets you update Clacky to the latest version without touching the terminal
+- **WebSocket connection status tips**: the Web UI now shows a clear indicator when the WebSocket connection is lost or reconnecting, so you always know if the server is reachable
+- **Master/worker server architecture**: the server now runs in a master + worker process model, enabling zero-downtime gem upgrades — the master restarts workers seamlessly after an upgrade
+
+### Fixed
+- **Relative paths in write/edit tools**: paths like `./foo/bar.rb` are now correctly resolved relative to the working directory instead of the process root, preventing unexpected file placement
+
 ## [0.9.9] - 2026-03-23
 
 ### Added

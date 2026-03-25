@@ -102,6 +102,23 @@ body {
 }
 #app { display: flex; flex-direction: column; width: 100%; height: 100vh; }
 
+/* ── Offline Banner ───────────────────────────────────────────────────── */
+#offline-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning-border);
+}
+
 /* ── Content Row (Sidebar + Main) ───────────────────────────────────────── */
 #content-row {
   display: flex;
@@ -1423,6 +1440,19 @@ body {
 #sib-cost  { flex-shrink: 0; }
 
 /* ── Input area (wraps preview strip + input bar) ────────────────────────── */
+#ws-disconnect-hint {
+  position: absolute;
+  bottom: 100%;
+  right: 16px;
+  white-space: nowrap;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--color-warning);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+
 #input-area {
   position: relative;
   border-top: 1px solid var(--color-border-primary);
@@ -1694,7 +1724,10 @@ body {
   max-height: 200px;
   font-family: inherit;
   line-height: 1.5;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
+#user-input::-webkit-scrollbar { display: none; }
 #user-input:focus { outline: none; border-color: var(--color-accent-primary); }
 #btn-send, #btn-interrupt {
   border: none;
@@ -4284,20 +4317,39 @@ body.setup-mode[data-theme="dark"] {
 /* ── Version badge (inline in Settings row, right-aligned) ──────────────── */
 
 /* Settings button stretches to fill width; version badge pushes to the right */
-#btn-settings {
-  position: relative;
+/* Settings row: btn-settings + version badge side by side */
+.sidebar-nav-row {
+  display: flex;
+  align-items: stretch;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: background .15s;
+}
+.sidebar-nav-row:hover {
+  background: var(--color-bg-hover);
+}
+.sidebar-nav-row #btn-settings {
+  flex: 1;
+  border-radius: 0;
+  min-width: 0;
+  background: transparent !important;  /* row handles the bg */
+}
+.sidebar-nav-row:hover #btn-settings {
+  color: var(--color-text-primary);
+}
+.sidebar-nav-row #btn-settings.active {
+  color: var(--color-accent-primary);
 }
 
 .version-badge {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-left: auto;        /* push to right inside flex btn-settings */
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;          /* always clickable — shows status or upgrade popover */
-  transition: background .15s;
+  padding: 0 10px;
   flex-shrink: 0;
+  border-radius: 0;
+  cursor: pointer;
+  transition: background .15s;
 }
 
 .version-text {
@@ -4309,7 +4361,7 @@ body.setup-mode[data-theme="dark"] {
   line-height: 1;
 }
 /* Highlight version text when badge is actionable and btn is hovered */
-#btn-settings:hover .version-text { color: var(--color-text-tertiary); }
+.version-badge:hover .version-text { color: var(--color-text-tertiary); }
 .version-badge.has-update .version-text,
 .version-badge.upgrade-done .version-text { color: var(--color-accent-primary); }
 
