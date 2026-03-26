@@ -364,7 +364,7 @@ RSpec.describe Clacky::Agent do
       expect(recent).to eq([])
     end
 
-    it "returns all messages when count exceeds message count" do
+    it "returns all non-system messages when count exceeds message count" do
       messages = [
         { role: "system", content: "System" },
         { role: "user", content: "Hello" },
@@ -372,7 +372,9 @@ RSpec.describe Clacky::Agent do
       ]
 
       recent = agent.send(:get_recent_messages_with_tool_pairs, messages, 100)
-      expect(recent.size).to eq(3)
+      # system message is excluded — rebuild_with_compression prepends it separately
+      expect(recent.size).to eq(2)
+      expect(recent.none? { |m| m[:role] == "system" }).to be(true)
     end
   end
 

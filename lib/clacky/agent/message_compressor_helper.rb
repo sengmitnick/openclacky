@@ -135,6 +135,14 @@ module Clacky
           chunk_path: chunk_path
         ))
 
+        # Reset to the estimated size of the rebuilt (small) history.
+        # The compression call_llm reported the OLD large token count, so
+        # @previous_total_tokens would still be above COMPRESSION_THRESHOLD —
+        # without this reset the very next think() would re-trigger compression
+        # immediately, causing an infinite loop (especially after image uploads
+        # where base64 data inflates token counts dramatically).
+        @previous_total_tokens = @history.estimate_tokens
+
         # Track this compression
         @compressed_summaries << {
           level: compression_context[:compression_level],
@@ -166,6 +174,14 @@ module Clacky
 
         while i >= 0 && messages_collected < count
           msg = messages[i]
+
+          # Never include the system message — it is always prepended separately
+          # by rebuild_with_compression. Including it here would cause it to appear
+          # twice in the rebuilt history, inflating token counts on every compression.
+          if msg[:role] == "system"
+            i -= 1
+            next
+          end
 
           if messages_to_include.include?(i)
             i -= 1

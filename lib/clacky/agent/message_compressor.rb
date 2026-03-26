@@ -99,8 +99,13 @@ module Clacky
         raise "LLM compression failed: unable to parse compressed messages"
       end
 
-      # Return system message + compressed messages + recent messages
-      [system_msg, *parsed_messages, *recent_messages].compact
+      # Return system message + compressed messages + recent messages.
+      # Strip any system messages from recent_messages as a safety net —
+      # get_recent_messages_with_tool_pairs already excludes them, but this
+      # guard ensures we never end up with duplicate system prompts even if
+      # the caller passes an unfiltered list.
+      safe_recent = recent_messages.reject { |m| m[:role] == "system" }
+      [system_msg, *parsed_messages, *safe_recent].compact
     end
 
     private
