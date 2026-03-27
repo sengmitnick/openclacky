@@ -434,18 +434,19 @@ setup_gem_home() {
 
     export GEM_HOME="$HOME/.gem/ruby/${ruby_api}"
     export GEM_PATH="$HOME/.gem/ruby/${ruby_api}"
-    export PATH="$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
 
     print_info "System Ruby detected — gems will install to ~/.gem/ruby/${ruby_api}"
 
     # Persist to shell rc (use $HOME so the line is portable)
+    # Also add ~/.local/bin so brand wrapper commands installed there are found
     if [ -n "$SHELL_RC" ] && ! grep -q "GEM_HOME" "$SHELL_RC" 2>/dev/null; then
         {
             echo ""
             echo "# Ruby user gem dir (added by openclacky installer)"
             echo "export GEM_HOME=\"\$HOME/.gem/ruby/${ruby_api}\""
             echo "export GEM_PATH=\"\$HOME/.gem/ruby/${ruby_api}\""
-            echo "export PATH=\"\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
+            echo "export PATH=\"\$HOME/.local/bin:\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
         } >> "$SHELL_RC"
         print_info "GEM_HOME written to $SHELL_RC"
     fi
