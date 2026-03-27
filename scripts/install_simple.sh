@@ -277,18 +277,31 @@ check_ruby() {
 # Configure gem source (CN mirror if needed)
 # --------------------------------------------------------------------------
 configure_gem_source() {
-    [ "$USE_CN_MIRRORS" = true ] || return 0
-
     local gemrc="$HOME/.gemrc"
-    if [ -f "$gemrc" ] && grep -q "${CN_RUBYGEMS_URL}" "$gemrc" 2>/dev/null; then
-        print_success "gem source already → ${CN_RUBYGEMS_URL}"
-    else
-        [ -f "$gemrc" ] && mv "$gemrc" "$HOME/.gemrc_clackybak"
-        cat > "$gemrc" <<GEMRC
+
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        # CN: point gem source to Aliyun mirror
+        if [ -f "$gemrc" ] && grep -q "${CN_RUBYGEMS_URL}" "$gemrc" 2>/dev/null; then
+            print_success "gem source already → ${CN_RUBYGEMS_URL}"
+        else
+            [ -f "$gemrc" ] && mv "$gemrc" "$HOME/.gemrc_clackybak"
+            cat > "$gemrc" <<GEMRC
 :sources:
   - ${CN_RUBYGEMS_URL}
 GEMRC
-        print_success "gem source → ${CN_RUBYGEMS_URL}"
+            print_success "gem source → ${CN_RUBYGEMS_URL}"
+        fi
+    else
+        # Global: restore original gemrc if we were the ones who changed it
+        if [ -f "$gemrc" ] && grep -q "${CN_RUBYGEMS_URL}" "$gemrc" 2>/dev/null; then
+            if [ -f "$HOME/.gemrc_clackybak" ]; then
+                mv "$HOME/.gemrc_clackybak" "$gemrc"
+                print_info "gem source restored from backup"
+            else
+                rm "$gemrc"
+                print_info "gem source restored to default"
+            fi
+        fi
     fi
 }
 
@@ -574,8 +587,6 @@ main() {
             print_info "Please install Ruby >= 2.6.0 manually and run: gem install openclacky"
             exit 1
         fi
-        # WSL: auto-trust Windows system32 to suppress mise warnings
-        export MISE_TRUSTED_CONFIG_PATHS="/mnt/c/Windows/system32"
     elif [ "$OS" != "macOS" ]; then
         print_error "Unsupported OS: $OS"
         print_info "Please install Ruby >= 2.6.0 manually and run: gem install openclacky"
