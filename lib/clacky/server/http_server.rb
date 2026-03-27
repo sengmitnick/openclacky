@@ -16,6 +16,7 @@ require_relative "../brand_config"
 require_relative "channel"
 require_relative "../banner"
 require_relative "../utils/file_processor"
+require_relative "workspace_routes"
 
 module Clacky
   module Server
@@ -384,6 +385,8 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
             name = URI.decode_www_form_component(path.sub("/api/my-skills/", "").sub("/publish", ""))
             api_publish_my_skill(name, req, res)
+          elsif Clacky::Server::WorkspaceRoutes.handles?(method, path)
+            Clacky::Server::WorkspaceRoutes.dispatch(method, path, req, res, self)
           else
             not_found(res)
           end

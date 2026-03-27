@@ -14,6 +14,7 @@
       document.documentElement.setAttribute("data-theme", theme);
     })();
   </script>
+  <link rel="stylesheet" href="/workspace.css">
 </head>
 <body>
 <div id="offline-banner" style="display:none" data-i18n="offline.banner"></div>
@@ -88,6 +89,9 @@
         <!-- Load more buttons are rendered dynamically inside each section by Sessions.renderList() -->
       </div>
       
+      <!-- Workspace Group (content injected by workspace.js) -->
+      <div id="workspace-section"></div>
+
       <!-- Config Group -->
       <div id="config-section">
         <div class="sidebar-divider"><span data-i18n="sidebar.config">Config</span></div>
@@ -164,6 +168,9 @@
       <p data-i18n="welcome.body">Create a new session or select one from the sidebar.</p>
       <button id="btn-welcome-new" data-i18n="welcome.btn">New Session</button>
     </div>
+
+    <!-- Workspace panel (content injected by workspace.js) -->
+    <div id="workspace-panel" style="display:none"></div>
 
     <!-- Scheduled Tasks list panel (shown when user clicks "Scheduled Tasks") -->
     <div id="task-detail-panel" style="display:none">
@@ -602,5 +609,6 @@
 <script src="/brand.js"></script>
 <script src="/version.js"></script>
 <script src="/app.js"></script>
+<script src="/workspace.js"></script>
 </body>
 </html>
