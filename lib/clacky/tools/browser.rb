@@ -6,6 +6,9 @@ require "timeout"
 require "tmpdir"
 require "shellwords"
 require "yaml"
+require "base64"
+require "fileutils"
+require "securerandom"
 require_relative "base"
 
 module Clacky
@@ -159,11 +162,20 @@ module Clacky
         action = result[:action].to_s
 
         if action == "screenshot" && result[:image_data]
-          mime_type  = result[:mime_type] || "image/jpeg"
-          image_data = result[:image_data]
-          data_url   = "data:#{mime_type};base64,#{image_data}"
+          mime_type       = result[:mime_type] || "image/png"
+          image_data      = result[:image_data]
+          data_url        = "data:#{mime_type};base64,#{image_data}"
+          original_path   = result[:original_path]
+          compressed_path = result[:compressed_path]
+
+          text = "Screenshot captured."
+          if original_path || compressed_path
+            text += "\n- Original (full resolution): #{original_path || 'unavailable'}" \
+                    "\n- Compressed (800px, sent to AI): #{compressed_path || 'unavailable'}"
+          end
+
           return [
-            { type: "text",      text:      "Screenshot captured." },
+            { type: "text",      text:      text },
             { type: "image_url", image_url: { url: data_url } }
           ]
         end
@@ -416,6 +428,9 @@ module Clacky
                    output: text.empty? ? "Screenshot captured." : text }
         end
 
+        # Save original (full-resolution) PNG to disk before any downscaling
+        original_path = save_screenshot_to_disk(image_block["data"], suffix: "original")
+
         image_data = png_downscale_base64(image_block["data"], SCREENSHOT_MAX_WIDTH)
 
         if image_data.bytesize > SCREENSHOT_MAX_BASE64_BYTES
@@ -424,8 +439,13 @@ module Clacky
                    output: "Screenshot too large after resize (#{size_kb}KB). Use action=snapshot instead." }
         end
 
+        # Save compressed (800px) PNG for AI reference
+        compressed_path = save_screenshot_to_disk(image_data, suffix: "compressed")
+
         { action: "screenshot", success: true, profile: "user",
-          image_data: image_data, mime_type: "image/png", output: "Screenshot captured." }
+          image_data: image_data, mime_type: "image/png",
+          original_path: original_path, compressed_path: compressed_path,
+          output: "Screenshot captured." }
       end
 
       private def png_downscale_base64(b64, max_width)
@@ -441,6 +461,25 @@ module Clacky
           from: "#{src_w}x#{src_h} (#{before_kb}KB)",
           to:   "#{max_width}x#{dst_h} (#{after_kb}KB)")
         result
+      end
+
+      # Save a base64-encoded PNG screenshot to disk and return the file path.
+      # suffix: "original" or "compressed" — embedded in filename for clarity.
+      # Uses the same upload directory as other image files so the agent can
+      # reference, read, or pass the path to other tools.
+      private def save_screenshot_to_disk(base64_data, suffix: nil)
+        upload_dir = File.join(Dir.tmpdir, "clacky-uploads")
+        FileUtils.mkdir_p(upload_dir)
+        ts       = Time.now.strftime("%Y%m%d_%H%M%S")
+        hex      = SecureRandom.hex(4)
+        label    = suffix ? "_#{suffix}" : ""
+        filename = "screenshot_#{ts}_#{hex}#{label}.png"
+        path     = File.join(upload_dir, filename)
+        File.binwrite(path, Base64.strict_decode64(base64_data))
+        path
+      rescue => e
+        Clacky::Logger.error("screenshot_save_failed", error: e.message)
+        nil
       end
 
       # -----------------------------------------------------------------------
