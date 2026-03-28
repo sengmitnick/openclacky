@@ -300,7 +300,6 @@ module Clacky
         server.start
       end
 
-      private
 
       # ── Router ────────────────────────────────────────────────────────────────
 
@@ -1531,7 +1530,8 @@ module Clacky
             name:          preset["name"],
             base_url:      preset["base_url"],
             default_model: preset["default_model"],
-            models:        preset["models"] || []
+            models:        preset["models"] || [],
+            website_url:   preset["website_url"]
           }
         end
         json_response(res, 200, { providers: providers })

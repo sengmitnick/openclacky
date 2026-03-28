@@ -108,6 +108,8 @@ CN_CDN_BASE_URL="https://oss.1024code.com"
 CN_MISE_INSTALL_URL="${CN_CDN_BASE_URL}/mise.sh"
 CN_RUBY_PRECOMPILED_URL="${CN_CDN_BASE_URL}/ruby/ruby-{version}.{platform}.tar.gz"
 CN_RUBYGEMS_URL="https://mirrors.aliyun.com/rubygems/"
+CN_GEM_BASE_URL="${CN_CDN_BASE_URL}/openclacky"
+CN_GEM_LATEST_URL="${CN_GEM_BASE_URL}/latest.txt"
 
 # Active values (overridden by detect_network_region)
 MISE_INSTALL_URL="$DEFAULT_MISE_INSTALL_URL"
@@ -275,18 +277,31 @@ check_ruby() {
 # Configure gem source (CN mirror if needed)
 # --------------------------------------------------------------------------
 configure_gem_source() {
-    [ "$USE_CN_MIRRORS" = true ] || return 0
-
     local gemrc="$HOME/.gemrc"
-    if [ -f "$gemrc" ] && grep -q "${CN_RUBYGEMS_URL}" "$gemrc" 2>/dev/null; then
-        print_success "gem source already → ${CN_RUBYGEMS_URL}"
-    else
-        [ -f "$gemrc" ] && mv "$gemrc" "$HOME/.gemrc_clackybak"
-        cat > "$gemrc" <<GEMRC
+
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        # CN: point gem source to Aliyun mirror
+        if [ -f "$gemrc" ] && grep -q "${CN_RUBYGEMS_URL}" "$gemrc" 2>/dev/null; then
+            print_success "gem source already → ${CN_RUBYGEMS_URL}"
+        else
+            [ -f "$gemrc" ] && mv "$gemrc" "$HOME/.gemrc_clackybak"
+            cat > "$gemrc" <<GEMRC
 :sources:
   - ${CN_RUBYGEMS_URL}
 GEMRC
-        print_success "gem source → ${CN_RUBYGEMS_URL}"
+            print_success "gem source → ${CN_RUBYGEMS_URL}"
+        fi
+    else
+        # Global: restore original gemrc if we were the ones who changed it
+        if [ -f "$gemrc" ] && grep -q "${CN_RUBYGEMS_URL}" "$gemrc" 2>/dev/null; then
+            if [ -f "$HOME/.gemrc_clackybak" ]; then
+                mv "$HOME/.gemrc_clackybak" "$gemrc"
+                print_info "gem source restored from backup"
+            else
+                rm "$gemrc"
+                print_info "gem source restored to default"
+            fi
+        fi
     fi
 }
 
@@ -419,18 +434,19 @@ setup_gem_home() {
 
     export GEM_HOME="$HOME/.gem/ruby/${ruby_api}"
     export GEM_PATH="$HOME/.gem/ruby/${ruby_api}"
-    export PATH="$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
 
     print_info "System Ruby detected — gems will install to ~/.gem/ruby/${ruby_api}"
 
     # Persist to shell rc (use $HOME so the line is portable)
+    # Also add ~/.local/bin so brand wrapper commands installed there are found
     if [ -n "$SHELL_RC" ] && ! grep -q "GEM_HOME" "$SHELL_RC" 2>/dev/null; then
         {
             echo ""
             echo "# Ruby user gem dir (added by openclacky installer)"
             echo "export GEM_HOME=\"\$HOME/.gem/ruby/${ruby_api}\""
             echo "export GEM_PATH=\"\$HOME/.gem/ruby/${ruby_api}\""
-            echo "export PATH=\"\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
+            echo "export PATH=\"\$HOME/.local/bin:\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
         } >> "$SHELL_RC"
         print_info "GEM_HOME written to $SHELL_RC"
     fi
@@ -445,7 +461,23 @@ install_via_gem() {
     configure_gem_source
     setup_gem_home
 
-    gem install openclacky --no-document
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        # CN: download .gem from OSS, install dependencies from Aliyun mirror
+        print_info "Fetching latest version from OSS..."
+        local cn_version
+        cn_version=$(curl -fsSL "$CN_GEM_LATEST_URL" | tr -d '[:space:]')
+        print_info "Latest version: ${cn_version}"
+
+        local gem_url="${CN_GEM_BASE_URL}/openclacky-${cn_version}.gem"
+        local gem_file="/tmp/openclacky-${cn_version}.gem"
+        print_info "Downloading openclacky-${cn_version}.gem from OSS..."
+        curl -fsSL "$gem_url" -o "$gem_file"
+        print_info "Installing gem and dependencies from Aliyun mirror..."
+        gem install "$gem_file" --no-document --source "$CN_RUBYGEMS_URL"
+    else
+        print_info "Installing gem and dependencies from RubyGems..."
+        gem install openclacky --no-document
+    fi
 
     if [ $? -eq 0 ]; then
         print_success "${DISPLAY_NAME} installed successfully!"
@@ -556,8 +588,6 @@ main() {
             print_info "Please install Ruby >= 2.6.0 manually and run: gem install openclacky"
             exit 1
         fi
-        # WSL: auto-trust Windows system32 to suppress mise warnings
-        export MISE_TRUSTED_CONFIG_PATHS="/mnt/c/Windows/system32"
     elif [ "$OS" != "macOS" ]; then
         print_error "Unsupported OS: $OS"
         print_info "Please install Ruby >= 2.6.0 manually and run: gem install openclacky"

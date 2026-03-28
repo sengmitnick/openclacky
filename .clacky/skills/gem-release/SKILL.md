@@ -91,23 +91,62 @@ To use this skill, simply say:
    git push origin main --tags
    ```
 
-4. **Create GitHub Release**
+4. **Create GitHub Release and Upload gem**
 
-   Extract the release notes for this version from CHANGELOG.md, then create a GitHub Release:
+   Extract the release notes for this version from CHANGELOG.md, then create a GitHub Release with the .gem file attached:
    ```bash
    gh release create v{version} \
      --title "v{version}" \
      --notes-file /tmp/release_notes.md \
-     --latest
+     --latest \
+     openclacky-{version}.gem
    ```
 
    Steps:
    - Parse the CHANGELOG.md section for `[{version}]`
    - Write it to a temp file (e.g., `/tmp/release_notes_{version}.md`) to avoid shell escaping issues
-   - Run `gh release create` with `--notes-file`
+   - Run `gh release create` with `--notes-file` **and the .gem file as an asset**
    - Verify the release appears at: `https://github.com/clacky-ai/openclacky/releases`
 
    > **Prerequisite**: `gh` CLI must be installed (`brew install gh`) and authenticated (`gh auth login`)
+
+5. **Sync to Tencent Cloud OSS (CN mirror)**
+
+   After GitHub Release is created, upload the .gem file and update `latest.txt` on OSS so Chinese users can install without hitting GitHub directly:
+
+   ```bash
+   # Upload .gem file
+   coscli cp openclacky-{version}.gem cos://clackyai-1258723534/openclacky/openclacky-{version}.gem
+
+   # Update latest.txt
+   echo "{version}" > /tmp/latest.txt
+   coscli cp /tmp/latest.txt cos://clackyai-1258723534/openclacky/latest.txt
+
+   # Verify
+   curl -fsSL https://oss.1024code.com/openclacky/latest.txt
+   ```
+
+   Expected output of verify: `{version}`
+
+   > **Prerequisite**: `coscli` installed at `/usr/local/bin/coscli` and configured at `~/.cos.yaml`
+
+6. **Sync scripts/ to OSS**
+
+   After updating latest.txt, sync all files in `scripts/` to OSS so users always get the latest install scripts:
+
+   ```bash
+   # Upload each script file to OSS
+   for script in scripts/*; do
+     coscli cp "$script" cos://clackyai-1258723534/clacky-ai/openclacky/main/scripts/$(basename "$script")
+   done
+
+   # Verify one of the key scripts
+   curl -fsSL https://oss.1024code.com/clacky-ai/openclacky/main/scripts/install.sh | head -5
+   ```
+
+   This ensures `scripts/install.sh`, `scripts/install_simple.sh`, `scripts/install.ps1`, `scripts/uninstall.sh` and any future scripts are all mirrored on OSS.
+
+   > **Prerequisite**: Same `coscli` setup as above
 
 5. **Verify Publication**
    - Check gem appears on RubyGems.org
@@ -283,14 +322,27 @@ git tag vX.Y.Z
 git push origin main
 git push origin --tags
 
-# Create GitHub Release (requires gh CLI)
+# Create GitHub Release with .gem asset (requires gh CLI)
 # 1. Extract release notes from CHANGELOG.md for this version
 # 2. Write to temp file to avoid shell escaping issues
-# 3. Create the release
+# 3. Create the release and attach .gem file
 gh release create vX.Y.Z \
   --title "vX.Y.Z" \
   --notes-file /tmp/release_notes_X.Y.Z.md \
-  --latest
+  --latest \
+  openclacky-X.Y.Z.gem
+
+# Sync to Tencent Cloud OSS (CN mirror)
+coscli cp openclacky-X.Y.Z.gem cos://clackyai-1258723534/openclacky/openclacky-X.Y.Z.gem
+echo "X.Y.Z" > /tmp/latest.txt
+coscli cp /tmp/latest.txt cos://clackyai-1258723534/openclacky/latest.txt
+curl -fsSL https://oss.1024code.com/openclacky/latest.txt  # verify
+
+# Sync scripts/ to OSS
+for script in scripts/*; do
+  coscli cp "$script" cos://clackyai-1258723534/clacky-ai/openclacky/main/scripts/$(basename "$script")
+done
+curl -fsSL https://oss.1024code.com/clacky-ai/openclacky/main/scripts/install.sh | head -5  # verify
 ```
 
 ## File Locations
@@ -308,7 +360,9 @@ gh release create vX.Y.Z \
 - New version successfully published to RubyGems
 - Git repository updated with version tag
 - CHANGELOG.md updated with release notes
-- GitHub Release created and visible at https://github.com/clacky-ai/openclacky/releases
+- GitHub Release created with .gem file attached at https://github.com/clacky-ai/openclacky/releases
+- .gem file uploaded to OSS: https://oss.1024code.com/openclacky/openclacky-{version}.gem
+- latest.txt updated on OSS: https://oss.1024code.com/openclacky/latest.txt returns the new version
 - No build or deployment errors
 - User-facing release summary presented at the end
 

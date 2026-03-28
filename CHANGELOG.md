@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.18] - 2026-03-28
+
+### Fixed
+- **Brand skill config now reloads from disk on every `load_all`**: brand skills installed or activated after the initial startup were previously invisible until restart — the skill loader now refreshes `BrandConfig` each time it loads skills, so newly installed brand skills take effect immediately
+
+### More
+- Remove `private` keyword from all internal classes to improve Ruby 2.6 compatibility
+- Rename `install.sh` → `install_full.sh`; promote `install_simple.sh` → `install.sh` as the default entry point
+
+## [0.9.17] - 2026-03-27
+
+### Added
+- **Browser screenshots now saved to disk**: every screenshot action automatically saves both the original full-resolution PNG and the compressed (800px) version to disk — the agent reports both file paths so you can reference, open, or pass the screenshots to other tools
+- **Provider "Get API Key" links in onboarding**: the setup wizard now shows a direct link to the provider's website when you select a provider that has a `website_url` — making it easier to sign up and get your API key without leaving the flow
+
+### Fixed
+- **WebSocket auto-reconnect for Feishu and WeCom channels**: the WebSocket clients for Feishu and WeCom now automatically retry the connection after failures — channels stay online without manual intervention after a network hiccup
+- **Brand command in simple install script**: the `clacky` brand command was incorrectly invoked in `install_simple.sh` — now fixed so the post-install branding step runs correctly
+- **Windows WSL2 and Hyper-V detection in PowerShell installer**: improved detection logic for WSL2 and Hyper-V environments in `install.ps1`, reducing false negatives on Windows machines with non-standard configurations
+
+## [0.9.16] - 2026-03-27
+
+### Fixed
+- **Skill templates now expand `${ENV_VAR}` placeholders**: skill SKILL.md files can reference environment variables like `${CLACKY_SERVER_HOST}` and `${CLACKY_SERVER_PORT}` — they are now automatically substituted at load time (unknown variables are left as-is)
+- **gemrc restored to default when switching from CN to global network**: the install script now correctly restores the system gemrc when the user switches from China mirror mode to the global network, preventing stale mirror configuration from persisting
+
+## [0.9.15] - 2026-03-27
+
+### Improved
+- **CN install now downloads gem from OSS mirror**: Chinese users no longer hit RubyGems.org or GitHub during installation — the install script fetches the `.gem` file directly from `oss.1024code.com` and installs dependencies via Aliyun mirror, making installs faster and more reliable in mainland China
+
 ## [0.9.14] - 2026-03-27
 
 ### Fixed

@@ -42,6 +42,10 @@ module Clacky
     # Clears previously loaded skills before loading to ensure idempotency
     # @return [Array<Skill>] Loaded skills
     def load_all
+      # Always refresh brand_config from disk so newly installed/activated brand
+      # skills are visible even if this SkillLoader was created before the change.
+      @brand_config = Clacky::BrandConfig.load
+
       # Clear existing skills to ensure idempotent reloading
       clear
 
@@ -297,7 +301,6 @@ module Clacky
       true
     end
 
-    private
 
     def load_skills_from_directory(dir, source_type)
       return [] unless dir.exist?
