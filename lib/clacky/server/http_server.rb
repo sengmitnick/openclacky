@@ -316,11 +316,8 @@ module Clacky
         case [method, path]
         when ["GET",    "/api/sessions"]      then api_list_sessions(req, res)
         when ["POST",   "/api/sessions"]      then api_create_session(req, res)
-        when ["GET",    "/api/schedules"]     then api_list_schedules(res)
-        when ["POST",   "/api/schedules"]     then api_create_schedule(req, res)
-        when ["GET",    "/api/tasks"]         then api_list_tasks(res)
-        when ["POST",   "/api/tasks"]         then api_create_task(req, res)
-        when ["POST",   "/api/tasks/run"]     then api_run_task(req, res)
+        when ["GET",    "/api/cron-tasks"]    then api_list_cron_tasks(res)
+        when ["POST",   "/api/cron-tasks"]    then api_create_cron_task(req, res)
         when ["GET",    "/api/skills"]         then api_list_skills(res)
         when ["GET",    "/api/config"]        then api_get_config(res)
         when ["POST",   "/api/config"]        then api_save_config(req, res)
@@ -366,15 +363,15 @@ module Clacky
           elsif method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
             api_delete_session(session_id, res)
-          elsif method == "DELETE" && path.start_with?("/api/schedules/")
-            name = URI.decode_www_form_component(path.sub("/api/schedules/", ""))
-            api_delete_schedule(name, res)
-          elsif method == "GET" && path.start_with?("/api/tasks/")
-            name = URI.decode_www_form_component(path.sub("/api/tasks/", ""))
-            api_get_task(name, res)
-          elsif method == "DELETE" && path.start_with?("/api/tasks/")
-            name = URI.decode_www_form_component(path.sub("/api/tasks/", ""))
-            api_delete_task(name, res)
+          elsif method == "POST" && path.match?(%r{^/api/cron-tasks/[^/]+/run$})
+            name = URI.decode_www_form_component(path.sub("/api/cron-tasks/", "").sub("/run", ""))
+            api_run_cron_task(name, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/cron-tasks/[^/]+$})
+            name = URI.decode_www_form_component(path.sub("/api/cron-tasks/", ""))
+            api_update_cron_task(name, req, res)
+          elsif method == "DELETE" && path.match?(%r{^/api/cron-tasks/[^/]+$})
+            name = URI.decode_www_form_component(path.sub("/api/cron-tasks/", ""))
+            api_delete_cron_task(name, res)
           elsif method == "PATCH" && path.match?(%r{^/api/skills/[^/]+/toggle$})
             name = URI.decode_www_form_component(path.sub("/api/skills/", "").sub("/toggle", ""))
             api_toggle_skill(name, req, res)
@@ -765,46 +762,146 @@ module Clacky
       end
 
       # POST /api/version/upgrade
-      # Runs `gem update openclacky --no-document` via Clacky::Tools::Shell (login shell)
-      # in a background thread, streaming output via WebSocket broadcast.
-      # On success, re-execs the process so the new gem version is loaded.
+      # Upgrades openclacky in a background thread, streaming output via WebSocket broadcast.
+      # If the user's gem source is the official RubyGems, use `gem update`.
+      # Otherwise (e.g. Aliyun mirror) download the .gem from OSS CDN to bypass mirror lag.
       def api_upgrade_version(req, res)
         json_response(res, 202, { ok: true, message: "Upgrade started" })
 
         Thread.new do
           begin
-            Clacky::Logger.info("[Upgrade] Starting: gem update openclacky --no-document")
-            broadcast_all(type: "upgrade_log", line: "Starting upgrade: gem update openclacky --no-document\n")
-
-            shell  = Clacky::Tools::Shell.new
-            Clacky::Logger.info("[Upgrade] Calling shell.execute...")
-            result = shell.execute(command: "gem update openclacky --no-document",
-                                   soft_timeout: 30, hard_timeout: 300)
-            Clacky::Logger.info("[Upgrade] shell.execute returned: exit_code=#{result[:exit_code]}")
-            Clacky::Logger.info("[Upgrade] stdout=#{result[:stdout].to_s.slice(0, 500)}")
-            Clacky::Logger.info("[Upgrade] stderr=#{result[:stderr].to_s.slice(0, 500)}")
-
-            output  = [result[:stdout], result[:stderr]].join
-            success = result[:exit_code] == 0
-
-            clients_count = @ws_mutex.synchronize { @all_ws_conns.size }
-            Clacky::Logger.info("[Upgrade] Broadcasting output to #{clients_count} WS client(s)")
-            broadcast_all(type: "upgrade_log", line: output)
-
-            if success
-              Clacky::Logger.info("[Upgrade] Success!")
-              broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Please restart the server to apply the new version.\n")
-              broadcast_all(type: "upgrade_complete", success: true)
+            if official_gem_source?
+              upgrade_via_gem_update
             else
-              Clacky::Logger.warn("[Upgrade] Failed. exit_code=#{result[:exit_code]}")
-              broadcast_all(type: "upgrade_log", line: "\n✗ Upgrade failed. Please try manually: gem update openclacky\n")
-              broadcast_all(type: "upgrade_complete", success: false)
+              upgrade_via_oss_cdn
             end
           rescue StandardError => e
             Clacky::Logger.error("[Upgrade] Exception: #{e.class}: #{e.message}\n#{e.backtrace.first(5).join("\n")}")
             broadcast_all(type: "upgrade_log", line: "\n✗ Error during upgrade: #{e.message}\n")
             broadcast_all(type: "upgrade_complete", success: false)
           end
+        end
+      end
+
+      # Returns true when the configured gem source is the official RubyGems.org.
+      # Raises on error — caller's rescue will handle it.
+      private def official_gem_source?
+        shell  = Clacky::Tools::Shell.new
+        result = shell.execute(command: "gem sources -l", soft_timeout: 10, hard_timeout: 15)
+        raise "gem sources -l failed (exit #{result[:exit_code]}): #{result[:stderr]}" unless result[:exit_code] == 0
+
+        sources = result[:stdout].to_s
+        Clacky::Logger.info("[Upgrade] gem sources: #{sources.strip}")
+        sources.include?("https://rubygems.org") &&
+          !sources.match?(%r{mirrors\.|aliyun|tuna|ustc|ruby-china})
+      end
+
+      # Upgrade via `gem update openclacky --no-document` (official RubyGems source).
+      private def upgrade_via_gem_update
+        cmd = "gem update openclacky --no-document"
+        Clacky::Logger.info("[Upgrade] Official source — running: #{cmd}")
+        broadcast_all(type: "upgrade_log", line: "Starting upgrade: #{cmd}\n")
+
+        shell  = Clacky::Tools::Shell.new
+        result = shell.execute(command: cmd, soft_timeout: 30, hard_timeout: 300)
+
+        Clacky::Logger.info("[Upgrade] exit_code=#{result[:exit_code]}")
+        Clacky::Logger.info("[Upgrade] stdout=#{result[:stdout].to_s.slice(0, 500)}")
+        Clacky::Logger.info("[Upgrade] stderr=#{result[:stderr].to_s.slice(0, 500)}")
+
+        output  = [result[:stdout], result[:stderr]].join
+        success = result[:exit_code] == 0
+
+        broadcast_all(type: "upgrade_log", line: output)
+        finish_upgrade(success, fallback_hint: "gem update openclacky")
+      end
+
+      # Upgrade via OSS CDN: fetch latest.txt → download .gem → gem install (bypasses mirror lag).
+      private def upgrade_via_oss_cdn
+        require "net/http"
+        require "uri"
+
+        oss_base   = "https://oss.1024code.com/openclacky"
+        latest_url = "#{oss_base}/latest.txt"
+
+        Clacky::Logger.info("[Upgrade] Non-official source — fetching latest version from OSS CDN")
+        broadcast_all(type: "upgrade_log", line: "Non-official gem source detected — fetching latest version from OSS CDN...\n")
+
+        # Step 1: fetch latest version from OSS
+        latest_version = fetch_oss_latest_version(latest_url)
+        unless latest_version
+          broadcast_all(type: "upgrade_log", line: "✗ Failed to fetch latest version from OSS CDN\n")
+          broadcast_all(type: "upgrade_complete", success: false)
+          return
+        end
+
+        broadcast_all(type: "upgrade_log", line: "Latest version: #{latest_version}\n")
+
+        # Already up to date?
+        unless version_older?(Clacky::VERSION, latest_version)
+          broadcast_all(type: "upgrade_log", line: "✓ Already at latest version (#{Clacky::VERSION})\n")
+          broadcast_all(type: "upgrade_complete", success: true)
+          return
+        end
+
+        # Step 2: download .gem file from OSS
+        gem_url  = "#{oss_base}/openclacky-#{latest_version}.gem"
+        gem_file = "/tmp/openclacky-#{latest_version}.gem"
+        broadcast_all(type: "upgrade_log", line: "Downloading openclacky-#{latest_version}.gem from OSS...\n")
+        Clacky::Logger.info("[Upgrade] Downloading #{gem_url}")
+
+        shell = Clacky::Tools::Shell.new
+        dl    = shell.execute(command: "curl -fsSL '#{gem_url}' -o '#{gem_file}'",
+                              soft_timeout: 60, hard_timeout: 120)
+        unless dl[:exit_code] == 0
+          broadcast_all(type: "upgrade_log", line: "✗ Download failed: #{dl[:stderr]}\n")
+          broadcast_all(type: "upgrade_complete", success: false)
+          return
+        end
+
+        # Step 3: install the downloaded .gem (dependencies resolved via configured gem source)
+        cmd    = "gem install '#{gem_file}' --no-document"
+        broadcast_all(type: "upgrade_log", line: "Installing...\n")
+        Clacky::Logger.info("[Upgrade] Running: #{cmd}")
+
+        result  = shell.execute(command: cmd, soft_timeout: 30, hard_timeout: 300)
+        output  = [result[:stdout], result[:stderr]].join
+        success = result[:exit_code] == 0
+
+        broadcast_all(type: "upgrade_log", line: output)
+        finish_upgrade(success, fallback_hint: "gem install #{gem_url}")
+      ensure
+        File.delete(gem_file) if gem_file && File.exist?(gem_file) rescue nil
+      end
+
+      # Fetch the latest version string from OSS latest.txt.
+      private def fetch_oss_latest_version(url)
+        require "net/http"
+        uri  = URI(url)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl      = uri.scheme == "https"
+        http.open_timeout = 10
+        http.read_timeout = 10
+        res = http.get(uri.request_uri)
+        return nil unless res.is_a?(Net::HTTPSuccess)
+
+        version = res.body.to_s.strip
+        version.empty? ? nil : version
+      rescue StandardError => e
+        Clacky::Logger.warn("[Upgrade] fetch_oss_latest_version error: #{e.message}")
+        nil
+      end
+
+      # Broadcast final upgrade result with appropriate log message.
+      private def finish_upgrade(success, fallback_hint: "gem update openclacky")
+        if success
+          Clacky::Logger.info("[Upgrade] Success!")
+          broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Please restart the server to apply the new version.\n")
+          broadcast_all(type: "upgrade_complete", success: true)
+        else
+          Clacky::Logger.warn("[Upgrade] Failed.")
+          broadcast_all(type: "upgrade_log", line: "\n✗ Upgrade failed. Please try manually: #{fallback_hint}\n")
+          broadcast_all(type: "upgrade_complete", success: false)
         end
       end
 
@@ -1145,109 +1242,81 @@ module Clacky
         }
       end
 
-      # ── Schedules API ─────────────────────────────────────────────────────────
 
-      def api_list_schedules(res)
-        json_response(res, 200, { schedules: @scheduler.schedules })
+      # ── Cron-Tasks API ───────────────────────────────────────────────────────
+      # Unified API that manages task file + schedule as a single resource.
+
+      # GET /api/cron-tasks
+      def api_list_cron_tasks(res)
+        json_response(res, 200, { cron_tasks: @scheduler.list_cron_tasks })
       end
 
-      def api_create_schedule(req, res)
-        body = parse_json_body(req)
-        name = body["name"].to_s.strip
-        task = body["task"].to_s.strip
-        cron = body["cron"].to_s.strip
+      # POST /api/cron-tasks — create task file + schedule in one step
+      # Body: { name, content, cron, enabled? }
+      def api_create_cron_task(req, res)
+        body    = parse_json_body(req)
+        name    = body["name"].to_s.strip
+        content = body["content"].to_s
+        cron    = body["cron"].to_s.strip
+        enabled = body.key?("enabled") ? body["enabled"] : true
 
-        if name.empty? || task.empty? || cron.empty?
-          json_response(res, 422, { error: "name, task, and cron are required" })
-          return
+        return json_response(res, 422, { error: "name is required" })    if name.empty?
+        return json_response(res, 422, { error: "content is required" }) if content.empty?
+        return json_response(res, 422, { error: "cron is required" })    if cron.empty?
+
+        fields = cron.strip.split(/\s+/)
+        unless fields.size == 5
+          return json_response(res, 422, { error: "cron must have 5 fields (min hour dom month dow)" })
         end
 
-        unless @scheduler.list_tasks.include?(task)
-          json_response(res, 422, { error: "Task not found: #{task}" })
-          return
-        end
-
-        @scheduler.add_schedule(name: name, task: task, cron: cron)
+        @scheduler.create_cron_task(name: name, content: content, cron: cron, enabled: enabled)
         json_response(res, 201, { ok: true, name: name })
       end
 
-      def api_delete_schedule(name, res)
-        if @scheduler.remove_schedule(name)
-          json_response(res, 200, { ok: true })
-        else
-          json_response(res, 404, { error: "Schedule not found: #{name}" })
+      # PATCH /api/cron-tasks/:name — update content and/or cron/enabled
+      # Body: { content?, cron?, enabled? }
+      def api_update_cron_task(name, req, res)
+        body    = parse_json_body(req)
+        content = body["content"]
+        cron    = body["cron"]&.to_s&.strip
+        enabled = body["enabled"]
+
+        if cron && cron.split(/\s+/).size != 5
+          return json_response(res, 422, { error: "cron must have 5 fields (min hour dom month dow)" })
         end
-      end
 
-      # ── Tasks API ─────────────────────────────────────────────────────────────
-
-      def api_list_tasks(res)
-        tasks = @scheduler.list_tasks.map do |name|
-          content = begin
-            @scheduler.read_task(name)
-          rescue StandardError
-            ""
-          end
-          { name: name, path: @scheduler.task_file_path(name), content: content }
-        end
-        json_response(res, 200, { tasks: tasks })
-      end
-
-      def api_get_task(name, res)
-        content = @scheduler.read_task(name)
-        json_response(res, 200, { name: name, content: content })
+        @scheduler.update_cron_task(name, content: content, cron: cron, enabled: enabled)
+        json_response(res, 200, { ok: true, name: name })
       rescue => e
         json_response(res, 404, { error: e.message })
       end
 
-      def api_delete_task(name, res)
-        if @scheduler.delete_task(name)
+      # DELETE /api/cron-tasks/:name — remove task file + schedule
+      def api_delete_cron_task(name, res)
+        if @scheduler.delete_cron_task(name)
           json_response(res, 200, { ok: true })
         else
-          json_response(res, 404, { error: "Task not found: #{name}" })
+          json_response(res, 404, { error: "Cron task not found: #{name}" })
         end
       end
 
-      def api_create_task(req, res)
-        body    = parse_json_body(req)
-        name    = body["name"].to_s.strip
-        content = body["content"].to_s
-
-        if name.empty?
-          json_response(res, 422, { error: "name is required" })
-          return
+      # POST /api/cron-tasks/:name/run — execute immediately
+      def api_run_cron_task(name, res)
+        unless @scheduler.list_tasks.include?(name)
+          return json_response(res, 404, { error: "Cron task not found: #{name}" })
         end
 
-        @scheduler.write_task(name, content)
-        json_response(res, 201, { ok: true, name: name })
-      end
+        prompt       = @scheduler.read_task(name)
+        session_name = "▶ #{name} #{Time.now.strftime("%H:%M")}"
+        working_dir  = File.expand_path("~/clacky_workspace")
+        FileUtils.mkdir_p(working_dir)
 
-      def api_run_task(req, res)
-        body = parse_json_body(req)
-        name = body["name"].to_s.strip
+        session_id = build_session(name: session_name, working_dir: working_dir, permission_mode: :auto_approve)
+        @registry.update(session_id, pending_task: prompt, pending_working_dir: working_dir)
 
-        if name.empty?
-          json_response(res, 422, { error: "name is required" })
-          return
-        end
-
-        begin
-          prompt       = @scheduler.read_task(name)
-          session_name = "▶ #{name} #{Time.now.strftime("%H:%M")}"
-          working_dir  = File.expand_path("~/clacky_workspace")
-          FileUtils.mkdir_p(working_dir)
-
-          # Tasks run unattended — use auto_approve so request_user_feedback doesn't block.
-          session_id = build_session(name: session_name, working_dir: working_dir, permission_mode: :auto_approve)
-
-          # Store the pending task prompt so the WS "run_task" message can start it
-          # after the client has subscribed and is ready to receive broadcasts.
-          @registry.update(session_id, pending_task: prompt, pending_working_dir: working_dir)
-
-          json_response(res, 202, { ok: true, session: @registry.session_summary(session_id) })
-        rescue => e
-          json_response(res, 422, { error: e.message })
-        end
+        json_response(res, 202, { ok: true, session: @registry.session_summary(session_id) })
+      rescue => e
+        json_response(res, 422, { error: e.message })
       end
 
       # ── Skills API ────────────────────────────────────────────────────────────
@@ -1505,12 +1574,13 @@ module Clacky
         end
 
         begin
+          model = body["model"].to_s
           test_client = Clacky::Client.new(
             api_key,
             base_url:         body["base_url"].to_s,
+            model:            model,
             anthropic_format: body["anthropic_format"] || false
           )
-          model = body["model"].to_s
           result = test_client.test_connection(model: model)
           if result[:success]
             json_response(res, 200, { ok: true, message: "Connected successfully" })
@@ -1741,6 +1811,7 @@ module Clacky
       rescue JSON::ParserError => e
         conn.send_json(type: "error", message: "Invalid JSON: #{e.message}")
       rescue => e
+        Clacky::Logger.error("[on_ws_message] #{e.class}: #{e.message}\n#{e.backtrace.first(10).join("\n")}")
         conn.send_json(type: "error", message: e.message)
       end
 
