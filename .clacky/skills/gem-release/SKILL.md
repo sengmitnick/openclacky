@@ -4,7 +4,7 @@ name: gem-release
 description: >-
   Automates the complete process of releasing a new version of the openclacky Ruby
   gem
-disable-model-invocation: false
+disable-model-invocation: true
 user-invocable: true
 ---
 
